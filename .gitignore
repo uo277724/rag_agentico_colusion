@@ -1,0 +1,62 @@
+# ======================
+# Archivos y carpetas de datos locales
+# ======================
+data/
+*.sqlite3
+*.db
+*.bin
+*.csv
+*.jsonl
+
+# ======================
+# Archivos de entorno y configuración sensible
+# ======================
+.env
+.env.*
+!.env.example
+
+# ======================
+# Python
+# ======================
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.pdb
+*.egg-info/
+*.egg
+dist/
+build/
+.eggs/
+*.log
+
+# ======================
+# IDEs y editores
+# ======================
+.vscode/
+.idea/
+*.swp
+*.swo
+*.bak
+
+# ======================
+# Docker
+# ======================
+# Ignorar volúmenes locales o datos montados
+volumes/
+# Archivos temporales generados por Docker Compose
+docker-compose.override.yml
+
+# ======================
+# Sistemas operativos
+# ======================
+.DS_Store
+Thumbs.db
+
+# ======================
+# Entornos virtuales
+# ======================
+venv/
+.envrc
+.venv/
+env/

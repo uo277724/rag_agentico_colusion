@@ -1,0 +1,25 @@
+version: "3.9"
+
+services:
+  rag_dev:
+    build: .
+    container_name: rag_agents_v2
+    hostname: rag_agents_v2
+    shm_size: "16G"
+    environment:
+      - OPENAI_API_KEY=${OPENAI_API_KEY}   # se propaga desde tu shell
+      - DEEPINFRA_TOKEN=${DEEPINFRA_TOKEN}
+      - CHROMA_PATH=/app/data/chroma
+    volumes:
+      - .:/workspace                       # monta tu código para desarrollo
+      - ./data:/app/data                   # persistencia del índice
+    working_dir: /workspace
+    ports:
+      - "8501:8501"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - capabilities: [gpu]
+    stdin_open: true
+    tty: true

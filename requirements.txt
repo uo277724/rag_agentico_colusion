@@ -1,0 +1,13 @@
+streamlit
+openai
+chromadb
+sentence-transformers
+PyMuPDF
+python-docx
+langchain
+python-dotenv
+langchain-text-splitters
+pdfminer
+pdfminer.six
+scikit-learn
+textstat
