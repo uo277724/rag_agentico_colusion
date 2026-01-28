@@ -18,48 +18,88 @@ from agents.setup_screening import initialize_screening_agentic
 # ==========================================================
 # UI HELPERS
 # ==========================================================
+def chat_container():
+    return st.container(border=True)
+
+def render_user_message(text: str):
+    col_left, col_right = st.columns([1, 4])
+    with col_right:
+        with st.container(border=True):
+            st.markdown(
+                f"""
+                <div style="
+                    text-align: right;
+                    margin-right: 20px;
+                    padding-bottom: 12px;
+                    padding-top: 2px;
+                ">
+                    <div style="font-weight: 600;">🧑 Usuario</div>
+                    <div>{text}</div>
+                </div>
+                """,
+                unsafe_allow_html=True
+            )
+
 def render_screening_result(result: dict):
-    st.subheader("📊 Resultados de Screening")
-
     metrics = result.get("metrics", {})
-    meta = result.get("meta", {})
     explanation = result.get("explanation")
+    meta = result.get("meta", {})
 
-    if not metrics:
-        st.warning("No se han devuelto métricas.")
+    col_left, col_right = st.columns([4, 1])
+    with col_left:
+        with st.container(border=True):
+            st.markdown("🤖 **Asistente**")
+
+            if not metrics:
+                st.warning("No se han devuelto métricas.")
+                return
+
+            # Métrica integrada como texto (esto lo mantenemos)
+            for metric, data in metrics.items():
+                if isinstance(data, dict) and "value" in data:
+                    value = round(data["value"], 4)
+                    st.markdown(
+                        f"El **{metric.upper()}** es **{value}**, "
+                        f"lo que se interpreta de la siguiente forma:"
+                    )
+
+            if explanation:
+                st.markdown(explanation)
+
+            with st.expander("🔧 Detalle técnico"):
+                st.json(metrics)
+
+            if meta:
+                with st.expander("📎 Metadatos"):
+                    st.json(meta)
+
+def render_assistant_text(answer: str):
+    col_left, col_right = st.columns([4, 1])
+    with col_left:
+        with st.container(border=True):
+            st.markdown("🤖 **Asistente**")
+            st.markdown(answer)
+
+def render_assistant_message(content):
+    if not isinstance(content, dict):
+        render_assistant_text(str(content))
         return
 
-    # -----------------------------
-    # Métricas numéricas
-    # -----------------------------
-    cols = st.columns(len(metrics))
+    if not content.get("ok", True):
+        col_left, _ = st.columns([5, 2])
+        with col_left:
+            with st.container(border=True):
+                st.markdown("🤖 **Asistente**")
+                st.error(content.get("error", "Error desconocido"))
+                st.json(content)
+        return
 
-    for col, (metric, data) in zip(cols, metrics.items()):
-        with col:
-            if isinstance(data, dict) and "value" in data:
-                st.metric(
-                    label=metric.upper(),
-                    value=round(data["value"], 4)
-                )
-            else:
-                st.metric(label=metric.upper(), value="N/A")
-
-    # -----------------------------
-    # Explicación en lenguaje natural
-    # -----------------------------
-    if explanation:
-        st.subheader("🧠 Interpretación del resultado")
-        st.markdown(explanation)
-
-    # -----------------------------
-    # Detalle técnico
-    # -----------------------------
-    with st.expander("📐 Detalle técnico"):
-        st.json(metrics)
-
-    if meta:
-        with st.expander("📎 Metadatos"):
-            st.json(meta)
+    if "metrics" in content:
+        render_screening_result(content)
+    elif "answer" in content:
+        render_assistant_text(content["answer"])
+    else:
+        render_assistant_text(str(content))
 
 
 # ==========================================================
@@ -71,9 +111,6 @@ def run_app():
     # ------------------------------------------------------
     # HEADER
     # ------------------------------------------------------
-    if os.path.exists("./data/itur-web-1.webp"):
-        st.image("./data/itur-web-1.webp", width=400)
-
     st.title("Screening de Licitaciones – Agentic RAG")
 
     st.markdown("""
@@ -89,12 +126,9 @@ def run_app():
     # ======================================================
     # INITIALIZATION
     # ======================================================
-
-    # ---- Embedder ----
     if "embedder" not in st.session_state:
         st.session_state.embedder = Embedder("intfloat/e5-large-v2")
 
-    # ---- Vectorstore ----
     if "vectorstore" not in st.session_state:
         os.makedirs("data/chroma", exist_ok=True)
         session_id = str(int(time.time()))
@@ -107,7 +141,6 @@ def run_app():
 
         st.info(f"Colección temporal creada: {collection_name}")
 
-    # ---- Agentic Screening ----
     if "agentic" not in st.session_state:
         st.session_state.agentic = initialize_screening_agentic(
             st.session_state.embedder,
@@ -120,12 +153,10 @@ def run_app():
     if "chat_history" not in st.session_state:
         st.session_state.chat_history = []
 
-    st.divider()
-
     # ======================================================
     # DOCUMENT INGESTION
     # ======================================================
-    st.header("1️⃣ Subida e indexación de documentación")
+    st.header("Subida e indexación de documentación")
 
     uploaded_files = st.file_uploader(
         "Sube documentos (PDF, TXT, DOCX):",
@@ -133,7 +164,7 @@ def run_app():
         accept_multiple_files=True,
     )
 
-    if uploaded_files and st.button("📥 Procesar e indexar"):
+    if uploaded_files and st.button("Procesar e indexar"):
         with st.spinner("Procesando documentos..."):
             for file in uploaded_files:
                 temp_path = f"temp_{file.name}"
@@ -148,35 +179,18 @@ def run_app():
 
         st.success("Documentación indexada correctamente.")
 
-    st.divider()
-
     # ======================================================
-    # QUERY
+    # QUERY INPUT
     # ======================================================
-    st.header("2️⃣ Consulta")
+    st.header("Consulta")
 
     query = st.text_input(
-        "Introduce una consulta (ej: 'Calcula CV, RD y KSTEST para esta licitación'):"
+        "Introduce una consulta (ej: Calcula CV, RD y KSTEST para esta licitación)"
     )
 
-    submit_query = st.button("🚀 Ejecutar")
-
-    if submit_query and query.strip():
-        with st.spinner("El agente está analizando la licitación…"):
+    if st.button("Ejecutar") and query.strip():
+        with st.spinner("El agente está analizando la licitación..."):
             result = st.session_state.planner.run(query)
-
-        if not result.get("ok"):
-            st.error(f"❌ Error: {result.get('error')}")
-            st.json(result)
-        else:
-            if "answer" in result:
-                st.subheader("📄 Respuesta documental")
-                st.markdown(result["answer"])
-            elif "metrics" in result:
-                render_screening_result(result)
-            else:
-                st.warning("Resultado devuelto en formato no reconocido")
-                st.json(result)
 
         st.session_state.chat_history.append({
             "role": "user",
@@ -192,51 +206,19 @@ def run_app():
     st.divider()
 
     # ======================================================
-    # LAST RESPONSE
+    # CHAT FLOW
     # ======================================================
-    if st.session_state.chat_history:
-        last_user = next(
-            (m for m in reversed(st.session_state.chat_history) if m["role"] == "user"),
-            None,
-        )
-        last_assistant = next(
-            (m for m in reversed(st.session_state.chat_history) if m["role"] == "assistant"),
-            None,
-        )
+    st.header("Conversación")
 
-        if last_user and last_assistant:
-            st.markdown("## 🟦 Última interacción")
-            st.markdown(f"**👤 Usuario:** {last_user['content']}")
-
-            content = last_assistant["content"]
-            if isinstance(content, dict) and "metrics" in content:
-                render_screening_result(content)
-            elif isinstance(content, dict) and "answer" in content:
-                st.markdown(content["answer"])
-
-    st.divider()
-
-    # ======================================================
-    # HISTORY
-    # ======================================================
-    st.header("📜 Historial completo")
-
-    for msg in st.session_state.chat_history[:-2]:
+    for msg in st.session_state.chat_history:
         if msg["role"] == "user":
-            st.markdown(f"**👤 Usuario:** {msg['content']}")
+            render_user_message(msg["content"])
         else:
             content = msg["content"]
             if isinstance(content, dict) and "metrics" in content:
                 render_screening_result(content)
             elif isinstance(content, dict) and "answer" in content:
-                st.markdown(content["answer"])
-
-    if st.session_state.chat_history:
-        st.markdown("---")
-        if st.button("🧹 Limpiar historial"):
-            st.session_state.chat_history.clear()
-            st.rerun()
-
+                render_assistant_text(content["answer"])
 
 # ==========================================================
 # ENTRYPOINT
