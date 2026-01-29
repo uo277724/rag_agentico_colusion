@@ -32,7 +32,7 @@ class RAGExtractBidsTool:
         raw_results = retriever.retrieve(query)
 
         if not raw_results:
-            print("[RAG_EXTRACT_BIDS] ❌ No evidence retrieved")
+            print("[RAG_EXTRACT_BIDS] No evidence retrieved")
             return {"error": "No relevant documentation found"}
 
         print(f"[RAG_EXTRACT_BIDS] Raw units retrieved: {len(raw_results)}")
@@ -62,7 +62,7 @@ class RAGExtractBidsTool:
         print(f"[RAG_EXTRACT_BIDS] Context length: {len(context)} chars")
 
         if not context:
-            print("[RAG_EXTRACT_BIDS] ❌ Empty context after normalization")
+            print("[RAG_EXTRACT_BIDS] Empty context after normalization")
             return {"error": "Empty context after retrieval"}
 
         # --------------------------------------------------
@@ -122,7 +122,7 @@ Extract bid candidates.
         try:
             bid_candidates = json.loads(clean_output)
         except Exception as e:
-            print("[RAG_EXTRACT_BIDS] ❌ JSON parse error:", e)
+            print("[RAG_EXTRACT_BIDS] JSON parse error:", e)
             return {
                 "error": "Failed to parse bid extraction output",
                 "raw_output": raw_output

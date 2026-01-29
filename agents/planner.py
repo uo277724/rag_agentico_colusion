@@ -57,6 +57,54 @@ RULES:
 """
 
     # --------------------------------------------------
+    # Helper: generate explanation when calculation is not possible
+    # --------------------------------------------------
+    def _generate_unfeasible_explanation(
+        self,
+        query: str,
+        reason: str,
+        details: Dict[str, Any],
+    ) -> str:
+        completion = self.client.chat.completions.create(
+            model="gpt-4o-mini",
+            temperature=0.1,
+            messages=[
+                {
+                    "role": "system",
+                    "content": """
+You explain why a numerical screening indicator
+cannot be computed.
+
+RULES:
+- Do NOT compute anything.
+- Do NOT explain formulas.
+- Do NOT invent data.
+- Base the explanation ONLY on the provided facts.
+- Use clear, professional, neutral language.
+"""
+                },
+                {
+                    "role": "user",
+                    "content": f"""
+User question:
+\"\"\"{query}\"\"\" 
+
+Reason why calculation is not possible:
+{reason}
+
+Details:
+{json.dumps(details, indent=2)}
+
+Explain this to the user in a clear way.
+"""
+                }
+            ],
+            max_tokens=200
+        )
+
+        return completion.choices[0].message.content.strip()
+
+    # --------------------------------------------------
     # Run
     # --------------------------------------------------
     def run(self, query: str) -> Dict[str, Any]:
@@ -75,7 +123,7 @@ RULES:
                     "role": "user",
                     "content": f"""
 User query:
-\"\"\"{query}\"\"\"
+\"\"\"{query}\"\"\" 
 
 Return format:
 {{
@@ -95,8 +143,7 @@ Return format:
             parsed = json.loads(raw_output)
             intent = parsed.get("intent")
             requested_metrics = [m.lower() for m in parsed.get("metrics", [])]
-        except Exception as e:
-            print("[PLANNER] ❌ JSON parse error:", str(e))
+        except Exception:
             return {
                 "ok": False,
                 "error": "Failed to parse planner output",
@@ -106,23 +153,14 @@ Return format:
         print("[PLANNER] Parsed intent:", intent)
         print("[PLANNER] Parsed metrics:", requested_metrics)
 
-        # Normalización defensiva del intent
         if intent not in ("rag", "screening"):
-            print("[PLANNER] ⚠️ Unknown intent, defaulting to 'rag'")
             intent = "rag"
 
         # ----------------------------------------------
         # STEP 2: DOCUMENTAL RAG
         # ----------------------------------------------
         if intent == "rag":
-            print("[PLANNER] Entering RAG mode")
-
-            rag = self.tool_manager.execute(
-                "rag_query",
-                {"query": query}
-            )
-
-            print("[PLANNER] RAG tool ok:", rag.get("ok"))
+            rag = self.tool_manager.execute("rag_query", {"query": query})
 
             if not rag.get("ok"):
                 return {
@@ -132,8 +170,6 @@ Return format:
                 }
 
             result = rag.get("result", {})
-            print("[PLANNER] RAG completed successfully")
-
             return {
                 "ok": True,
                 "mode": "rag",
@@ -149,17 +185,20 @@ Return format:
         print("[PLANNER] Entering SCREENING mode")
 
         if not requested_metrics:
-            print("[PLANNER] ❌ Screening intent but no metrics detected")
+            explanation = self._generate_unfeasible_explanation(
+                query=query,
+                reason="No screening metrics were identified in the request.",
+                details={"supported_metrics": list(SCREENING_METRICS.keys())},
+            )
             return {
-                "ok": False,
+                "ok": True,
                 "mode": "screening",
-                "error": "Screening intent detected but no supported metrics identified",
-                "supported_metrics": list(SCREENING_METRICS.keys()),
+                "status": "no_metrics",
+                "answer": explanation,
             }
 
         for m in requested_metrics:
             if m not in SCREENING_METRICS:
-                print(f"[PLANNER] ❌ Unsupported metric: {m}")
                 return {
                     "ok": False,
                     "error": f"Unsupported screening metric '{m}'"
@@ -168,14 +207,10 @@ Return format:
         # ----------------------------------------------
         # STEP 4: EXTRACT BID CANDIDATES (RAG)
         # ----------------------------------------------
-        print("[PLANNER] Starting bid extraction")
-
         extraction = self.tool_manager.execute(
             "rag_extract_bids",
             {"query": query}
         )
-
-        print("[PLANNER] Extraction ok:", extraction.get("ok"))
 
         if not extraction.get("ok"):
             return {
@@ -186,36 +221,24 @@ Return format:
             }
 
         payload = extraction.get("result", {})
-        print("[PLANNER] Extraction payload keys:", payload.keys())
-        print("[PLANNER] Raw extracted bids:", payload.get("bids"))
 
         # ----------------------------------------------
-        # STEP 5: CONSOLIDATE BIDS (CRITICAL)
+        # STEP 5: CONSOLIDATE BIDS
         # ----------------------------------------------
-        print("[PLANNER] Starting bid consolidation")
-
-        try:
-            consolidated = self.consolidator.consolidate(payload)
-        except Exception as e:
-            print("[PLANNER] ❌ Consolidation error:", str(e))
-            return {
-                "ok": False,
-                "mode": "screening",
-                "error": "Bid consolidation failed",
-                "details": str(e)
-            }
-
-        print("[PLANNER] Consolidation result:", consolidated)
-
+        consolidated = self.consolidator.consolidate(payload)
         final_bids = consolidated.get("final_bids", [])
-        print("[PLANNER] Final bids:", final_bids)
 
         if not final_bids:
-            print("[PLANNER] ❌ No valid bids after consolidation")
+            explanation = self._generate_unfeasible_explanation(
+                query=query,
+                reason="No valid economic bids were identified after consolidation.",
+                details={},
+            )
             return {
-                "ok": False,
+                "ok": True,
                 "mode": "screening",
-                "error": "No valid bids after consolidation"
+                "status": "no_valid_bids",
+                "answer": explanation,
             }
 
         # ----------------------------------------------
@@ -223,41 +246,42 @@ Return format:
         # ----------------------------------------------
         for metric in requested_metrics:
             min_n = SCREENING_METRICS[metric]["min_n"]
-            print(
-                f"[PLANNER] Cardinality check for {metric}: "
-                f"{len(final_bids)} bids (min required: {min_n})"
-            )
+
             if len(final_bids) < min_n:
+                explanation = self._generate_unfeasible_explanation(
+                    query=query,
+                    reason="Insufficient number of valid bids.",
+                    details={
+                        "metric": metric,
+                        "n_bids": len(final_bids),
+                        "min_required": min_n,
+                    },
+                )
                 return {
-                    "ok": False,
+                    "ok": True,
                     "mode": "screening",
-                    "error": f"Not enough bids for metric '{metric}'",
-                    "required": min_n,
-                    "provided": len(final_bids),
+                    "status": "insufficient_bids",
+                    "answer": explanation,
+                    "meta": {
+                        "metric": metric,
+                        "n_bids": len(final_bids),
+                        "min_required": min_n,
+                        "currency": consolidated.get("currency"),
+                        "decisions": consolidated.get("decisions"),
+                    }
                 }
 
         # ----------------------------------------------
-        # STEP 7: CALCULATION AGENTS
+        # STEP 7: CALCULATION AGENTS (UNCHANGED)
         # ----------------------------------------------
         results = {}
         for metric in requested_metrics:
-            print(f"[PLANNER] Executing calculation agent: {metric}")
             agent = self.calculation_agents.get(metric)
-
-            if agent is None:
-                return {
-                    "ok": False,
-                    "error": f"No calculation agent for '{metric}'"
-                }
-
             results[metric] = agent.compute(final_bids)
-            print(f"[PLANNER] Result {metric} =", results[metric])
 
         # ----------------------------------------------
-        # STEP 8: QUALITATIVE EXPLANATION
+        # STEP 8: QUALITATIVE EXPLANATION (UNCHANGED)
         # ----------------------------------------------
-        print("[PLANNER] Generating qualitative explanation")
-
         explanation_completion = self.client.chat.completions.create(
             model="gpt-4o-mini",
             temperature=0.1,
@@ -290,13 +314,10 @@ Explain what these indicators MAY suggest.
         )
 
         explanation = explanation_completion.choices[0].message.content.strip()
-        print("[PLANNER] Explanation generated")
 
         # ----------------------------------------------
-        # STEP 9: FINAL RESPONSE
+        # STEP 9: FINAL RESPONSE (UNCHANGED)
         # ----------------------------------------------
-        print("[PLANNER] Screening completed successfully")
-
         return {
             "ok": True,
             "mode": "screening",
@@ -308,20 +329,5 @@ Explain what these indicators MAY suggest.
                 "confidence": consolidated.get("confidence"),
                 "decisions": consolidated.get("decisions"),
                 "source_docs": payload.get("source_docs"),
-            }
-        }
-
-        # ----------------------------------------------
-        # FALLBACK (SHOULD NEVER HAPPEN)
-        # ----------------------------------------------
-        print("[PLANNER] ❌ Reached unexpected end of planner.run")
-
-        return {
-            "ok": False,
-            "error": "Planner reached an unexpected state",
-            "debug": {
-                "query": query,
-                "intent": intent,
-                "metrics": requested_metrics
             }
         }

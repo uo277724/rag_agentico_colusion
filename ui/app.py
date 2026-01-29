@@ -94,13 +94,19 @@ def render_assistant_message(content):
                 st.json(content)
         return
 
-    if "metrics" in content:
+    # SOLO screening si hay métricas reales
+    if (
+        isinstance(content.get("metrics"), dict)
+        and content["metrics"]
+    ):
         render_screening_result(content)
+
+    # RAG textual
     elif "answer" in content:
         render_assistant_text(content["answer"])
+
     else:
         render_assistant_text(str(content))
-
 
 # ==========================================================
 # MAIN APP
@@ -215,7 +221,11 @@ def run_app():
             render_user_message(msg["content"])
         else:
             content = msg["content"]
-            if isinstance(content, dict) and "metrics" in content:
+            if (
+                isinstance(content, dict)
+                and isinstance(content.get("metrics"), dict)
+                and content["metrics"]
+            ):
                 render_screening_result(content)
             elif isinstance(content, dict) and "answer" in content:
                 render_assistant_text(content["answer"])

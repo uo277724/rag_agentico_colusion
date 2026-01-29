@@ -4,7 +4,6 @@ from retrieval.retriever import Retriever
 from retrieval.ranker import create_ranker
 from generation.generator import Generator
 
-# Evaluación y refinamiento
 from evaluation.judge_paper import evaluate_with_criteria
 from evaluation.metrics_extended import compute_extended_metrics
 from evaluation.refiner import ResponseRefiner
@@ -16,17 +15,8 @@ import time
 class RAGQueryTool:
     """
     Tool RAG DOCUMENTAL.
-
-    Ejecuta el pipeline completo:
-      1. Retrieval
-      2. Reranking
-      3. Generación con grounding
-      4. Evaluación
-      5. Refinamiento editorial (opcional)
-      6. Logging
-
-    NO calcula métricas numéricas.
-    NO infiere datos no presentes en el contexto.
+    Mantiene pipeline basado en texto plano,
+    pero es compatible con rankers que esperan dicts.
     """
 
     def __init__(
@@ -44,11 +34,6 @@ class RAGQueryTool:
         self.final_k = final_k
 
     def __call__(self, query: str):
-        """
-        Ejecuta el pipeline RAG documental.
-
-        Devuelve un payload enriquecido, apto para auditoría.
-        """
 
         print("\n[RAG] ===============================")
         print("[RAG] Query recibida:", query)
@@ -66,19 +51,16 @@ class RAGQueryTool:
         if not docs:
             return {
                 "mode": "rag_documental",
-                "answer": (
-                    "No dispongo de documentación cargada o relevante para "
-                    "responder a esta pregunta."
-                ),
+                "answer": "No dispongo de documentación relevante.",
                 "sources": [],
                 "evaluation": None,
                 "metrics": None,
                 "refiner": None,
             }
 
-        # ------------------------------------------------------
-        # Construcción explícita de contexto y fuentes
-        # ------------------------------------------------------
+        # ======================================================
+        # 2. CONTEXTO PLANO (COMO ANTES)
+        # ======================================================
         context_chunks = []
         sources = []
 
@@ -102,10 +84,7 @@ class RAGQueryTool:
         if not context:
             return {
                 "mode": "rag_documental",
-                "answer": (
-                    "La documentación disponible no contiene información "
-                    "suficiente para responder a esta consulta."
-                ),
+                "answer": "La documentación no contiene información suficiente.",
                 "sources": [],
                 "evaluation": None,
                 "metrics": None,
@@ -113,21 +92,22 @@ class RAGQueryTool:
             }
 
         # ======================================================
-        # 2. RERANKING
+        # 3. RERANKING (PARCHE COMPATIBLE)
         # ======================================================
         docs_raw = [d for d in context.split("\n---\n") if d.strip()]
+
         if not docs_raw:
             return {
                 "mode": "rag_documental",
-                "answer": (
-                    "La documentación disponible no contiene información "
-                    "suficiente para responder a esta consulta."
-                ),
+                "answer": "No hay información relevante.",
                 "sources": sources,
                 "evaluation": None,
                 "metrics": None,
                 "refiner": None,
             }
+
+        # WRAP: str -> dict (solo para el ranker)
+        docs_for_ranker = [{"content": d, "metadata": {}} for d in docs_raw]
 
         ranker = create_ranker(
             mode=self.ranker_mode,
@@ -136,24 +116,28 @@ class RAGQueryTool:
             verbose=False,
         )
 
-        ranked_docs = [d for d in ranker.rerank(query, docs_raw) if d.strip()]
-        if not ranked_docs:
+        ranked_wrapped = ranker.rerank(query, docs_for_ranker)
+
+        if not ranked_wrapped:
             return {
                 "mode": "rag_documental",
-                "answer": (
-                    "No se encontró información relevante en la documentación "
-                    "para responder a esta pregunta."
-                ),
+                "answer": "No se encontró información relevante.",
                 "sources": sources,
                 "evaluation": None,
                 "metrics": None,
                 "refiner": None,
             }
 
+        # UNWRAP: dict -> str (como antes)
+        ranked_docs = [
+            d["content"] for d in ranked_wrapped
+            if isinstance(d, dict) and d.get("content")
+        ]
+
         ranked_context = "\n---\n".join(ranked_docs)
 
         # ======================================================
-        # 3. GENERACIÓN
+        # 4. GENERACIÓN
         # ======================================================
         start_time = time.time()
 
@@ -169,10 +153,7 @@ class RAGQueryTool:
         if not answer:
             return {
                 "mode": "rag_documental",
-                "answer": (
-                    "No fue posible generar una respuesta clara a partir "
-                    "de la documentación disponible."
-                ),
+                "answer": "No fue posible generar una respuesta clara.",
                 "sources": sources,
                 "evaluation": None,
                 "metrics": None,
@@ -180,7 +161,7 @@ class RAGQueryTool:
             }
 
         # ======================================================
-        # 4. EVALUACIÓN
+        # 5. EVALUACIÓN
         # ======================================================
         judge_result = evaluate_with_criteria(
             question=query,
@@ -197,16 +178,15 @@ class RAGQueryTool:
         )
 
         # ======================================================
-        # 5. REFINAMIENTO EDITORIAL
+        # 6. REFINAMIENTO
         # ======================================================
         refiner = ResponseRefiner(
             model_name="gpt-4o-mini",
-            threshold=2.5,
+            score_threshold=2.5,
         )
 
         refine_result = refiner.refine(
             question=query,
-            context=ranked_context,
             answer=answer,
             judge_result=judge_result,
         )
@@ -214,10 +194,9 @@ class RAGQueryTool:
         if refine_result.get("status") == "refined":
             answer = refine_result.get("refined_answer", answer)
 
-        # ======================================================
-        # 6. LOGGING
-        # ======================================================
         log_evaluation(
+            question=query,
+            answer=answer,
             judge_result=judge_result,
             metrics_ext=metrics_ext,
             refine_result=refine_result,
@@ -230,18 +209,10 @@ class RAGQueryTool:
             "answer": answer,
             "sources": sources,
             "evaluation": judge_result,
-            "metrics": metrics_ext,
             "refiner": refine_result,
         }
 
-
 def build_rag_tools(embedder, vectorstore):
-    """
-    Construye las herramientas RAG expuestas al ToolManager.
-    """
-
-    rag_query_tool = RAGQueryTool(embedder, vectorstore)
-
     return {
-        "rag_query": rag_query_tool
+        "rag_query": RAGQueryTool(embedder, vectorstore)
     }
