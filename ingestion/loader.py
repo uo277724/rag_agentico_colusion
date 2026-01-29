@@ -1,13 +1,15 @@
 import os
 import fitz  # PyMuPDF
 import docx
-from openai import OpenAI
 from ingestion.img_processor import ImageProcessor
 from dotenv import load_dotenv
 
 load_dotenv()
 
 SUPPORTED_EXTENSIONS = [".pdf", ".txt", ".docx"]
+
+MAX_CHARS = 1000
+OVERLAP_CHARS = 200
 
 
 # --------------------------------------------------
@@ -43,96 +45,63 @@ def _load_docx(file_path: str) -> str:
 
 
 # --------------------------------------------------
-# 2. Segmentación semántica funcional (LLM)
+# 2. Chunking estructural con solapamiento
 # --------------------------------------------------
-def _semantic_segment(text: str, model: str = "gpt-4.1-mini") -> list[dict]:
-    """
-    Divide el texto en unidades documentales funcionales:
-    tablas económicas, descripciones, anexos, etc.
-    No extrae datos, solo segmenta y tipifica.
-    """
-
-    client = OpenAI()
-
-    prompt = """
-    Segmenta el siguiente texto en unidades documentales funcionales coherentes.
-    Para cada unidad indica:
-    - type: tipo funcional (ej. tabla_economica, descripcion, anexo, presupuesto_base, otro)
-    - content: texto completo de esa unidad
-    - confidence: confianza de que sea una unidad autónoma (0–1)
-
-    Reglas:
-    - No extraigas precios ni valores.
-    - No resumas.
-    - No inventes contenido.
-    - Cada unidad debe poder entenderse de forma autónoma.
-    """
-
-    response = client.chat.completions.create(
-        model=model,
-        temperature=0,
-        messages=[
-            {"role": "system", "content": "Eres un analista documental experto en contratación pública."},
-            {"role": "user", "content": prompt + "\n\nTEXTO:\n" + text}
-        ]
-    )
-
-    try:
-        units = eval(response.choices[0].message.content)
-        return [u for u in units if u.get("confidence", 0) >= 0.5]
-    except Exception:
-        return [{
-            "type": "otro",
-            "content": text,
-            "confidence": 0.3
-        }]
-
-
-# --------------------------------------------------
-# 3. Chunking condicionado por tipo
-# --------------------------------------------------
-def _chunk_by_type(units: list[dict], source: str) -> list[dict]:
+def _chunk_with_overlap(text: str, max_chars: int, overlap_chars: int):
     chunks = []
+    cursor = 0
+    length = len(text)
 
-    for u in units:
-        t = u["type"]
-        content = u["content"].strip()
+    while cursor < length:
+        end = min(cursor + max_chars, length)
+        chunk = text[cursor:end].strip()
 
-        if len(content.split()) < 20:
-            continue
+        if chunk:
+            chunks.append(chunk)
 
-        chunks.append({
-            "type": t,
-            "source": source,
-            "content": content
-        })
+        if end == length:
+            break
+
+        cursor = end - overlap_chars
+        if cursor < 0:
+            cursor = 0
 
     return chunks
 
 
 # --------------------------------------------------
-# 4. Pipeline principal
+# 3. Pipeline principal
 # --------------------------------------------------
 def process_file(file_path: str):
     ext = os.path.splitext(file_path)[1].lower()
     base_name = os.path.basename(file_path)
 
+    all_chunks = []
+
     if ext == ".pdf":
         blocks = _load_pdf_blocks(file_path)
 
-        # Agrupar por página para no mezclar contextos
         pages = {}
         for b in blocks:
             pages.setdefault(b["page"], []).append(b["text"])
 
-        semantic_units = []
         for page, texts in pages.items():
             page_text = "\n".join(texts)
-            semantic_units.extend(_semantic_segment(page_text))
+            chunks = _chunk_with_overlap(
+                page_text,
+                max_chars=MAX_CHARS,
+                overlap_chars=OVERLAP_CHARS
+            )
 
-        text_chunks = _chunk_by_type(semantic_units, base_name)
+            for c in chunks:
+                all_chunks.append({
+                    "type": "otro",
+                    "source": base_name,
+                    "page": page,
+                    "content": c
+                })
 
-        # Imágenes (se mantienen igual, pero separadas)
+        # Imágenes (sin cambios)
         img_processor = ImageProcessor()
         images = img_processor.process_pdf_images(file_path)
 
@@ -143,22 +112,42 @@ def process_file(file_path: str):
             "content": img["description"]
         } for img in images]
 
-        all_chunks = text_chunks + image_chunks
+        all_chunks.extend(image_chunks)
 
     elif ext == ".txt":
         raw = _load_txt(file_path)
-        units = _semantic_segment(raw)
-        all_chunks = _chunk_by_type(units, base_name)
+        chunks = _chunk_with_overlap(
+            raw,
+            max_chars=MAX_CHARS,
+            overlap_chars=OVERLAP_CHARS
+        )
+
+        for c in chunks:
+            all_chunks.append({
+                "type": "otro",
+                "source": base_name,
+                "content": c
+            })
 
     elif ext == ".docx":
         raw = _load_docx(file_path)
-        units = _semantic_segment(raw)
-        all_chunks = _chunk_by_type(units, base_name)
+        chunks = _chunk_with_overlap(
+            raw,
+            max_chars=MAX_CHARS,
+            overlap_chars=OVERLAP_CHARS
+        )
+
+        for c in chunks:
+            all_chunks.append({
+                "type": "otro",
+                "source": base_name,
+                "content": c
+            })
 
     else:
         raise ValueError(f"Formato no soportado: {ext}")
 
-    print(f"[LOADER] {len(all_chunks)} unidades documentales generadas")
+    print(f"[LOADER] {len(all_chunks)} chunks estructurales generados")
     if all_chunks:
         print("[LOADER] Ejemplo:")
         print(all_chunks[0]["type"], "→", all_chunks[0]["content"][:300])
