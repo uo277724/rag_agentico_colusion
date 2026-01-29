@@ -17,33 +17,49 @@ from agents.calculation.kstest import KSTestAgent
 
 # Planner
 from agents.planner import ScreeningPlannerAgent
-from embeddings import embedder
-import vectorstore
 
 
 def initialize_screening_agentic(embedder, vectorstore):
     """
-    Inicializa el sistema Agentic para Screening de licitaciones:
-    - RAG documental narrativo
-    - RAG numérico (extracción de bids)
+    Inicializa el sistema agéntico de screening de licitaciones.
+
+    Responsabilidades del sistema:
+    - RAG documental (explicativo)
+    - RAG extractivo (bids)
     - Cálculo determinista de métricas
+    - Interpretación no acusatoria de resultados
     """
+
+    # ---------------------------
+    # SYSTEM PROFILE (DECLARATIVO)
+    # ---------------------------
+    system_profile = {
+        "system_type": "public_tender_screening",
+        "mode": "screening",
+        "supported_metrics": [
+            "cv", "spd", "diffp", "rd", "kurt", "skew", "kstest"
+        ],
+        "rag_capabilities": [
+            "documentation_query",
+            "bid_extraction"
+        ],
+    }
 
     # ---------------------------
     # TOOL MANAGER
     # ---------------------------
-    tool_manager = ToolManager()
+    tool_manager = ToolManager(debug=True)
 
     # RAG narrativo
     rag_tools = build_rag_tools(embedder, vectorstore)
     tool_manager.register("rag_query", rag_tools["rag_query"])
 
-    # RAG numérico
+    # RAG extractivo (bids)
     rag_extract_bids_tool = RAGExtractBidsTool(embedder, vectorstore)
     tool_manager.register("rag_extract_bids", rag_extract_bids_tool)
 
     # ---------------------------
-    # CALCULATION AGENTS
+    # CALCULATION AGENTS (DETERMINISTAS)
     # ---------------------------
     calculation_agents = {
         "cv": CVAgent(),
@@ -56,7 +72,7 @@ def initialize_screening_agentic(embedder, vectorstore):
     }
 
     # ---------------------------
-    # PLANNER
+    # PLANNER (ORQUESTADOR)
     # ---------------------------
     planner = ScreeningPlannerAgent(
         tool_manager=tool_manager,
@@ -64,11 +80,12 @@ def initialize_screening_agentic(embedder, vectorstore):
     )
 
     # ---------------------------
-    # DEVOLVER COMPONENTES
+    # EXPORTAR SISTEMA
     # ---------------------------
     return {
         "planner": planner,
         "tool_manager": tool_manager,
         "calculation_agents": calculation_agents,
         "rag_tools": rag_tools,
+        "system_profile": system_profile,
     }

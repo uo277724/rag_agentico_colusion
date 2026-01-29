@@ -1,4 +1,3 @@
-# embeddings/embedder.py
 from sentence_transformers import SentenceTransformer
 import numpy as np
 import torch
@@ -7,8 +6,9 @@ import re
 
 class Embedder:
     """
-    Genera embeddings de alta fidelidad para texto técnico y multimodal.
-    Totalmente generalista: no depende de etiquetas o términos específicos.
+    Genera embeddings semánticos preservando estructura documental.
+    El embedder no decide relevancia: conserva información funcional
+    para que el RAG y los agentes razonen correctamente.
     """
 
     def __init__(
@@ -20,7 +20,6 @@ class Embedder:
     ):
         print(f"[EMBEDDER] Cargando modelo: {model_name}")
 
-        # Carga automática en GPU si está disponible
         if device is None:
             device = "cuda" if torch.cuda.is_available() else "cpu"
         self.device = device
@@ -30,101 +29,98 @@ class Embedder:
         self.batch_size = batch_size
 
         dim = self.model.get_sentence_embedding_dimension()
-        print(f"[EMBEDDER] Modelo cargado correctamente (dim={dim}) en dispositivo: {self.device}")
+        print(f"[EMBEDDER] Modelo cargado (dim={dim}) en {self.device}")
 
-    # -------------------------------------------------------------------------
-    # 1. Limpieza ligera (sin normalizar semántica)
-    # -------------------------------------------------------------------------
+    # --------------------------------------------------
+    # Limpieza mínima (no semántica)
+    # --------------------------------------------------
     def _clean_text(self, text: str) -> str:
-        """Limpieza neutra: elimina ruido y normaliza espacios."""
         if not isinstance(text, str):
             return ""
         text = re.sub(r"\s{2,}", " ", text)
-        text = text.replace("\r", " ").replace("\n", " ").strip()
-        return text
+        return text.replace("\n", " ").strip()
 
-    # -------------------------------------------------------------------------
-    # 2. Enriquecimiento contextual
-    # -------------------------------------------------------------------------
-    def _enrich_with_metadata(self, doc: dict) -> str:
+    # --------------------------------------------------
+    # Construcción de input para embedding
+    # --------------------------------------------------
+    def _build_embedding_input(self, doc: dict, mode: str) -> str:
         """
-        Integra metadatos estructurales antes del embedding,
-        sin modificar el contenido semántico del fragmento.
+        mode:
+        - index: recuperación RAG
+        - extract: extracción de bids
+        - explain: explicaciones / auditoría
         """
+
         content = self._clean_text(doc.get("content", ""))
 
-        meta_parts = []
-        if doc.get("type"):
-            meta_parts.append(f"Tipo: {doc['type'].capitalize()}")
-        if doc.get("page"):
-            meta_parts.append(f"Página: {doc['page']}")
-        if doc.get("source"):
-            meta_parts.append(f"Fuente: {doc['source']}")
+        if mode == "index":
+            # Preservar tipo de forma explícita y consistente
+            prefix = f"DOCUMENT TYPE: {doc.get('type', 'unknown')}. "
+            return prefix + content
 
-        # Prefijo informativo (sin sesgo semántico)
-        if meta_parts:
-            prefix = " | ".join(meta_parts)
-            enriched = f"[{prefix}] {content}"
-        else:
-            enriched = content
+        if mode == "extract":
+            # Máxima pureza semántica, mínimo ruido
+            return content
 
-        return enriched.strip()
+        if mode == "explain":
+            # Contexto rico para trazabilidad
+            meta = []
+            if doc.get("type"):
+                meta.append(f"Tipo: {doc['type']}")
+            if doc.get("page"):
+                meta.append(f"Página: {doc['page']}")
+            if doc.get("source"):
+                meta.append(f"Fuente: {doc['source']}")
 
-    # -------------------------------------------------------------------------
-    # 3. Embeddings simples (texto directo)
-    # -------------------------------------------------------------------------
-    def embed_texts(self, texts):
-        """Genera embeddings para una lista de textos simples."""
+            header = " | ".join(meta)
+            return f"[{header}] {content}" if header else content
+
+        return content
+
+    # --------------------------------------------------
+    # Embeddings genéricos
+    # --------------------------------------------------
+    def embed_texts(self, texts: list[str]) -> np.ndarray:
         if not texts:
-            print("[EMBEDDER] Lista vacía: no hay textos para procesar.")
             return np.array([])
 
         embeddings = self.model.encode(
             texts,
             batch_size=self.batch_size,
-            show_progress_bar=False,
             normalize_embeddings=self.normalize,
+            show_progress_bar=False,
         )
+        return np.asarray(embeddings)
 
-        print(f"[EMBEDDER] {len(embeddings)} embeddings generados (dim={embeddings.shape[1]})")
-        return np.array(embeddings)
-
-    # -------------------------------------------------------------------------
-    # 4. Embeddings con metadatos (documentos)
-    # -------------------------------------------------------------------------
-    def embed_documents(self, docs):
+    # --------------------------------------------------
+    # Embeddings documentales con modo
+    # --------------------------------------------------
+    def embed_documents(self, docs: list[dict], mode: str = "index") -> list[dict]:
         """
-        Recibe una lista de dicts [{"content":..., "source":..., "type":...}].
-        Añade 'embedding' a cada entrada.
+        Añade embeddings a los documentos.
+        mode controla cómo se construye el embedding.
         """
-        if not docs:
-            print("[EMBEDDER] No se recibieron documentos.")
-            return []
 
-        valid_docs = [d for d in docs if d.get("content") and d["content"].strip()]
-        skipped = len(docs) - len(valid_docs)
-        if skipped > 0:
-            print(f"[EMBEDDER] {skipped} fragmentos vacíos omitidos.")
-
+        valid_docs = [d for d in docs if d.get("content", "").strip()]
         if not valid_docs:
-            print("[EMBEDDER] No hay fragmentos válidos para generar embeddings.")
+            print("[EMBEDDER] No hay documentos válidos.")
             return []
 
-        enriched_texts = [self._enrich_with_metadata(d) for d in valid_docs]
-        print(f"[EMBEDDER] Generando embeddings para {len(enriched_texts)} fragmentos...")
+        inputs = [
+            self._build_embedding_input(d, mode=mode)
+            for d in valid_docs
+        ]
+
+        print(f"[EMBEDDER] Generando embeddings ({mode}) para {len(inputs)} documentos...")
 
         embeddings = self.model.encode(
-            enriched_texts,
+            inputs,
             batch_size=self.batch_size,
-            show_progress_bar=False,
             normalize_embeddings=self.normalize,
+            show_progress_bar=False,
         )
 
-        dim = embeddings.shape[1]
-        print(f"[EMBEDDER] Embeddings generados (dimensión: {dim})")
+        for doc, emb in zip(valid_docs, embeddings):
+            doc[f"embedding_{mode}"] = emb.tolist()
 
-        for i, doc in enumerate(valid_docs):
-            doc["embedding"] = embeddings[i].tolist()
-
-        print(f"[EMBEDDER] Proceso completado: {len(valid_docs)} fragmentos embebidos correctamente.")
         return valid_docs

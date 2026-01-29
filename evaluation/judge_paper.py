@@ -1,124 +1,115 @@
-# evaluation/judge_paper.py
 """
-LLM-as-a-Judge Agent — basado en el artículo de métricas de evaluación de modelos generativos.
-Evalúa la respuesta del RAG según criterios de claridad, relevancia, insightfulness y contextualización.
-Devuelve una puntuación detallada y un resumen de evaluación.
+LLM-as-a-Judge orientado a fidelidad, trazabilidad y seguridad analítica.
+No evalúa creatividad ni insight.
 """
 
 import json
 from openai import OpenAI
+from typing import Dict
 
 
-def evaluate_with_criteria(question: str, context: str, answer: str, model_name: str = "gpt-4o-mini"):
-    """
-    Evalúa la respuesta generada por el RAG siguiendo criterios definidos en el artículo.
-    
-    Parámetros:
-        question (str): Pregunta del usuario.
-        context (str): Contexto recuperado por el RAG.
-        answer (str): Respuesta generada por el sistema.
-        model_name (str): Modelo de evaluación LLM.
-
-    Retorna:
-        dict: Resultados de evaluación con puntuaciones y feedback.
-    """
-
+def evaluate_with_criteria(
+    question: str,
+    context: str,
+    answer: str,
+    model_name: str = "gpt-4o-mini",
+) -> Dict:
     client = OpenAI()
 
-    # --- Prompt del juez ---
     prompt = f"""
-Eres un juez técnico experto encargado de evaluar la calidad de respuestas generadas por un sistema RAG 
-basado en documentación industrial. Debes asignar puntuaciones de 0 a 4 según los criterios siguientes:
+You are a STRICT EVALUATION JUDGE for a documentation-based analytical RAG system.
 
-1 CLARITY (Claridad)
-- 0: Inadecuado – Confuso y ambiguo.
-- 1: Necesita mejora – Algunas partes comprensibles, pero difícil de seguir.
-- 2: Satisfactorio – Generalmente claro, con pequeños problemas.
-- 3: Proficiente – Muy claro y bien estructurado.
-- 4: Excelente – Perfectamente claro, preciso y técnico.
+CRITICAL EVALUATION RULES:
+- Do NOT reward creativity, insight, or interpretation.
+- Penalize any inference not explicitly supported by the context.
+- Penalize any number, claim, or conclusion not present in the context.
+- If the answer extrapolates beyond the context, mark it as an error.
 
-2 RELEVANCE (Relevancia)
-- 0: Inadecuado – No responde a la pregunta.
-- 1: Necesita mejora – Parcialmente relacionado, pero con divagaciones.
-- 2: Satisfactorio – Mayormente relevante.
-- 3: Proficiente – Altamente enfocado en la pregunta.
-- 4: Excelente – Completamente relevante y centrado.
+Evaluate the answer using the following criteria (0–4):
 
-3 INSIGHTFULNESS (Perspicacia / Profundidad)
-- 0: Inadecuado – Descriptivo o superficial.
-- 1: Necesita mejora – Aporta poco valor nuevo.
-- 2: Satisfactorio – Algunos elementos valiosos.
-- 3: Proficiente – Contiene ideas útiles o inferencias claras.
-- 4: Excelente – Aporta comprensión profunda o inferencias significativas.
+1. CLARITY
+- Is the answer clear, precise, and well structured?
 
-4 CONTEXTUALIZATION (Contextualización)
-- 0: Inadecuado – Sin conexión con el contexto o las implicaciones.
-- 1: Necesita mejora – Mínima conexión contextual.
-- 2: Satisfactorio – Algo de contextualización presente.
-- 3: Proficiente – Buena conexión con el contexto o implicaciones.
-- 4: Excelente – Plena contextualización técnica y operativa.
+2. RELEVANCE
+- Does the answer directly address the question?
 
----
+3. FAITHFULNESS
+- Is the answer strictly grounded in the provided context?
+- Are all claims and numbers present in the context?
 
-Devuelve **únicamente un objeto JSON** con esta estructura exacta:
+4. TRACEABILITY
+- Is it clear how the answer relates to the context?
+- Could a reviewer trace statements back to the context?
+
+Additionally, identify ISSUE TYPES if present:
+- "textual_issue"
+- "missing_evidence"
+- "unsupported_inference"
+- "analysis_error"
+- "wrong_calculation"
+
+Return ONLY a valid JSON object with EXACTLY this structure:
 {{
   "Clarity": <int>,
   "Relevance": <int>,
-  "Insightfulness": <int>,
-  "Contextualization": <int>,
+  "Faithfulness": <int>,
+  "Traceability": <int>,
   "Overall_score": <float>,
-  "Feedback": "<comentario breve sobre la respuesta>"
+  "Issue_types": [<string>, ...],
+  "Feedback": "<brief explanation>"
 }}
 
-PREGUNTA:
+QUESTION:
 {question}
 
-CONTEXTO (extracto relevante):
+CONTEXT (excerpt):
 {context[:1000]}
 
-RESPUESTA GENERADA:
+ANSWER:
 {answer}
 """
 
     try:
-        # Se solicita al modelo que devuelva un JSON válido
         response = client.chat.completions.create(
             model=model_name,
             temperature=0.0,
             response_format={"type": "json_object"},
             messages=[
-                {"role": "system", "content": "Eres un juez experto en documentación técnica industrial."},
+                {"role": "system", "content": "You are a conservative technical evaluator."},
                 {"role": "user", "content": prompt},
             ],
-            max_tokens=500
+            max_tokens=600,
         )
-        text = response.choices[0].message.content.strip()
-        result = json.loads(text)
+
+        result = json.loads(response.choices[0].message.content.strip())
 
     except Exception as e:
-        print(f"[JUDGE_PAPER ERROR] {e}")
-        try:
-            # Segundo intento (por si devuelve texto plano)
-            text = response.choices[0].message.content.strip()
-            json_str = text[text.find("{"):text.rfind("}")+1]
-            result = json.loads(json_str)
-        except Exception:
-            result = {
-                "Clarity": 0,
-                "Relevance": 0,
-                "Insightfulness": 0,
-                "Contextualization": 0,
-                "Overall_score": 0.0,
-                "Feedback": "No se pudo evaluar correctamente la respuesta."
-            }
+        print(f"[JUDGE ERROR] {e}")
+        result = {
+            "Clarity": 0,
+            "Relevance": 0,
+            "Faithfulness": 0,
+            "Traceability": 0,
+            "Overall_score": 0.0,
+            "Issue_types": ["evaluation_error"],
+            "Feedback": "The answer could not be evaluated reliably.",
+        }
 
-    # Cálculo del promedio general si no viene incluido
-    if "Overall_score" not in result or result["Overall_score"] == 0:
-        result["Overall_score"] = round((
-            result.get("Clarity", 0) +
-            result.get("Relevance", 0) +
-            result.get("Insightfulness", 0) +
-            result.get("Contextualization", 0)
-        ) / 4, 2)
+    # Calcular score si falta
+    if not result.get("Overall_score"):
+        result["Overall_score"] = round(
+            (
+                result.get("Clarity", 0)
+                + result.get("Relevance", 0)
+                + result.get("Faithfulness", 0)
+                + result.get("Traceability", 0)
+            )
+            / 4,
+            2,
+        )
+
+    # Normalizar Issue_types
+    if "Issue_types" not in result or not isinstance(result["Issue_types"], list):
+        result["Issue_types"] = []
 
     return result

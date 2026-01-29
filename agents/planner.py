@@ -4,10 +4,9 @@ import json
 from typing import Dict, Any, List
 from openai import OpenAI
 
+from agents.consolidation.bid_consolidator import BidConsolidationAgent
 
-# --------------------------------------------------
-# Registro de métricas de screening
-# --------------------------------------------------
+
 SCREENING_METRICS = {
     "cv": {"min_n": 2},
     "spd": {"min_n": 2},
@@ -21,69 +20,51 @@ SCREENING_METRICS = {
 
 class ScreeningPlannerAgent:
     """
-    Unified planner for:
-    - RAG documental narrativo
+    Planner agéntico para:
+    - RAG documental
     - Screening numérico de licitaciones
-
-    Responsibilities:
-    - Detect screening metrics from natural language
-    - Route to RAG or Screening pipeline
-    - Execute tools explicitly
-    - Validate numeric inputs
-    - Dispatch deterministic calculation agents
-    - Generate human-readable explanations
-    - Return structured, auditable output
-
-    This planner:
-    - NEVER computes metrics itself
-    - NEVER invents numeric values
-    - NEVER lets the LLM choose tools
     """
 
     def __init__(self, tool_manager, calculation_agents: Dict[str, Any]):
         self.client = OpenAI()
         self.tool_manager = tool_manager
         self.calculation_agents = calculation_agents
+        self.consolidator = BidConsolidationAgent()
 
     # --------------------------------------------------
-    # System prompt (metric detection only)
+    # Prompt de detección (clasificación pura)
     # --------------------------------------------------
     def _system_prompt(self) -> str:
         return """
-You are a metric classification agent for a public tender screening system.
+You are a STRICT SCREENING INTENT CLASSIFIER.
 
-Your task is to interpret the user's request and map it to the supported
-screening metrics IF POSSIBLE.
+TASK:
+1. Determine whether the user requests:
+   - DOCUMENTATION-ONLY information
+   - NUMERICAL SCREENING of bids
+
+2. If screening is requested, map to SUPPORTED METRICS ONLY.
 
 SUPPORTED METRICS:
-- cv      (coefficient of variation, dispersion of bids)
-- spd     (spread between highest and lowest bid)
-- diffp   (difference between two lowest bids)
-- rd      (relative distance between lowest bids)
-- kurt    (kurtosis of bid distribution)
-- skew    (skewness of bid distribution)
-- kstest  (uniformity test of bids)
+- cv, spd, diffp, rd, kurt, skew, kstest
 
 RULES:
-- You MUST return ONLY valid metric identifiers from the supported list.
-- You MAY map natural language expressions to the closest supported metric.
-- If the requested concept CANNOT be mapped to a supported metric, DO NOT invent one.
-- If no supported metrics apply, return an empty JSON array [].
+- Return ONLY a JSON object.
+- Do NOT invent metrics.
 - Do NOT compute anything.
-- Do NOT explain your reasoning.
+- If screening intent exists but no supported metrics apply,
+  return intent="screening" and metrics=[].
 """
 
     # --------------------------------------------------
     # Run
     # --------------------------------------------------
     def run(self, query: str) -> Dict[str, Any]:
-        print("\n==============================")
-        print("DEBUG: ScreeningPlanner.run")
-        print("DEBUG: Query:", query)
-        print("==============================")
+        print("\n[PLANNER] ======================")
+        print("[PLANNER] Query:", query)
 
         # ----------------------------------------------
-        # STEP 1: detect requested screening metrics
+        # STEP 1: INTENT + METRIC DETECTION
         # ----------------------------------------------
         completion = self.client.chat.completions.create(
             model="gpt-4o-mini",
@@ -96,41 +77,52 @@ RULES:
 User query:
 \"\"\"{query}\"\"\"
 
-Allowed screening metrics:
-{list(SCREENING_METRICS.keys())}
-
-Return ONLY a JSON array of metric identifiers.
-Example: ["cv", "rd"]
-If none are requested, return [].
+Return format:
+{{
+  "intent": "rag" | "screening",
+  "metrics": ["cv", "rd", ...]
+}}
 """
                 }
             ],
             max_tokens=200
         )
 
+        raw_output = completion.choices[0].message.content
+        print("[PLANNER] Raw classifier output:", raw_output)
+
         try:
-            requested_metrics: List[str] = json.loads(
-                completion.choices[0].message.content
-            )
-        except Exception:
+            parsed = json.loads(raw_output)
+            intent = parsed.get("intent")
+            requested_metrics = [m.lower() for m in parsed.get("metrics", [])]
+        except Exception as e:
+            print("[PLANNER] ❌ JSON parse error:", str(e))
             return {
                 "ok": False,
-                "error": "Failed to parse screening metrics from LLM output"
+                "error": "Failed to parse planner output",
+                "raw_output": raw_output
             }
 
-        # Normalización defensiva
-        requested_metrics = [m.lower() for m in requested_metrics]
+        print("[PLANNER] Parsed intent:", intent)
+        print("[PLANNER] Parsed metrics:", requested_metrics)
 
-        print("DEBUG: Requested metrics:", requested_metrics)
+        # Normalización defensiva del intent
+        if intent not in ("rag", "screening"):
+            print("[PLANNER] ⚠️ Unknown intent, defaulting to 'rag'")
+            intent = "rag"
 
         # ----------------------------------------------
-        # STEP 2: RAG DOCUMENTAL (no metrics requested)
+        # STEP 2: DOCUMENTAL RAG
         # ----------------------------------------------
-        if not requested_metrics:
+        if intent == "rag":
+            print("[PLANNER] Entering RAG mode")
+
             rag = self.tool_manager.execute(
                 "rag_query",
                 {"query": query}
             )
+
+            print("[PLANNER] RAG tool ok:", rag.get("ok"))
 
             if not rag.get("ok"):
                 return {
@@ -140,89 +132,132 @@ If none are requested, return [].
                 }
 
             result = rag.get("result", {})
+            print("[PLANNER] RAG completed successfully")
 
             return {
                 "ok": True,
+                "mode": "rag",
                 "answer": result.get("answer", ""),
-                "sources": result.get("sources", [])
+                "sources": result.get("sources", []),
+                "evaluation": result.get("evaluation"),
+                "metrics": result.get("metrics"),
             }
 
         # ----------------------------------------------
-        # STEP 3: validate requested metrics
+        # STEP 3: SCREENING VALIDATION
         # ----------------------------------------------
-        for metric in requested_metrics:
-            if metric not in SCREENING_METRICS:
+        print("[PLANNER] Entering SCREENING mode")
+
+        if not requested_metrics:
+            print("[PLANNER] ❌ Screening intent but no metrics detected")
+            return {
+                "ok": False,
+                "mode": "screening",
+                "error": "Screening intent detected but no supported metrics identified",
+                "supported_metrics": list(SCREENING_METRICS.keys()),
+            }
+
+        for m in requested_metrics:
+            if m not in SCREENING_METRICS:
+                print(f"[PLANNER] ❌ Unsupported metric: {m}")
                 return {
                     "ok": False,
-                    "error": f"Unknown screening metric '{metric}'"
+                    "error": f"Unsupported screening metric '{m}'"
                 }
 
         # ----------------------------------------------
-        # STEP 4: extract bids via RAG
+        # STEP 4: EXTRACT BID CANDIDATES (RAG)
         # ----------------------------------------------
+        print("[PLANNER] Starting bid extraction")
+
         extraction = self.tool_manager.execute(
             "rag_extract_bids",
             {"query": query}
         )
 
+        print("[PLANNER] Extraction ok:", extraction.get("ok"))
+
         if not extraction.get("ok"):
             return {
                 "ok": False,
-                "error": "Failed to extract bids",
+                "mode": "screening",
+                "error": "Bid extraction failed",
                 "details": extraction
             }
 
         payload = extraction.get("result", {})
-
-        bids = payload.get("bids")
-        if not isinstance(bids, list) or not bids:
-            return {
-                "ok": False,
-                "error": "No bids found in documentation"
-            }
-
-        print("DEBUG: Extracted bids:", bids)
+        print("[PLANNER] Extraction payload keys:", payload.keys())
+        print("[PLANNER] Raw extracted bids:", payload.get("bids"))
 
         # ----------------------------------------------
-        # STEP 5: validate cardinality
+        # STEP 5: CONSOLIDATE BIDS (CRITICAL)
+        # ----------------------------------------------
+        print("[PLANNER] Starting bid consolidation")
+
+        try:
+            consolidated = self.consolidator.consolidate(payload)
+        except Exception as e:
+            print("[PLANNER] ❌ Consolidation error:", str(e))
+            return {
+                "ok": False,
+                "mode": "screening",
+                "error": "Bid consolidation failed",
+                "details": str(e)
+            }
+
+        print("[PLANNER] Consolidation result:", consolidated)
+
+        final_bids = consolidated.get("final_bids", [])
+        print("[PLANNER] Final bids:", final_bids)
+
+        if not final_bids:
+            print("[PLANNER] ❌ No valid bids after consolidation")
+            return {
+                "ok": False,
+                "mode": "screening",
+                "error": "No valid bids after consolidation"
+            }
+
+        # ----------------------------------------------
+        # STEP 6: CARDINALITY CHECK
         # ----------------------------------------------
         for metric in requested_metrics:
             min_n = SCREENING_METRICS[metric]["min_n"]
-            if len(bids) < min_n:
+            print(
+                f"[PLANNER] Cardinality check for {metric}: "
+                f"{len(final_bids)} bids (min required: {min_n})"
+            )
+            if len(final_bids) < min_n:
                 return {
                     "ok": False,
+                    "mode": "screening",
                     "error": f"Not enough bids for metric '{metric}'",
                     "required": min_n,
-                    "provided": len(bids)
+                    "provided": len(final_bids),
                 }
 
         # ----------------------------------------------
-        # STEP 6: execute calculation agents
+        # STEP 7: CALCULATION AGENTS
         # ----------------------------------------------
         results = {}
-
         for metric in requested_metrics:
+            print(f"[PLANNER] Executing calculation agent: {metric}")
             agent = self.calculation_agents.get(metric)
+
             if agent is None:
                 return {
                     "ok": False,
-                    "error": f"No calculation agent registered for '{metric}'"
+                    "error": f"No calculation agent for '{metric}'"
                 }
 
-            print(f"DEBUG: Executing calculation agent '{metric}'")
-
-            try:
-                results[metric] = agent.compute(bids)
-            except Exception as e:
-                return {
-                    "ok": False,
-                    "error": f"Calculation failed for '{metric}'",
-                    "details": str(e)
-                }
+            results[metric] = agent.compute(final_bids)
+            print(f"[PLANNER] Result {metric} =", results[metric])
 
         # ----------------------------------------------
-        # STEP 7: natural language explanation (NEW)
+        # STEP 8: QUALITATIVE EXPLANATION
         # ----------------------------------------------
+        print("[PLANNER] Generating qualitative explanation")
+
         explanation_completion = self.client.chat.completions.create(
             model="gpt-4o-mini",
             temperature=0.1,
@@ -230,57 +265,63 @@ If none are requested, return [].
                 {
                     "role": "system",
                     "content": """
-        You are an explanatory assistant for PUBLIC TENDER SCREENING RESULTS.
+You interpret FINAL screening indicators ONLY.
 
-        ROLE DEFINITION:
-        - You interpret ALREADY COMPUTED screening indicators.
-        - You do NOT calculate, derive, or reconstruct metrics.
-        - You do NOT explain how indicators are computed.
-        - You do NOT introduce intermediate statistics (mean, std, variance, etc.).
-        - You do NOT infer numeric values not explicitly provided.
-
-        STRICT RULES:
-        - You may ONLY refer to the metric values explicitly provided.
-        - You may ONLY interpret their qualitative meaning.
-        - You must NOT restate formulas or computation steps.
-        - You must NOT invent or assume additional data.
-        - You must keep a neutral, non-accusatory tone.
-
-        If interpretation is not possible without additional data,
-        explicitly say that the indicator alone is insufficient.
-        """
+RULES:
+- Do NOT compute or derive anything.
+- Do NOT explain formulas.
+- Do NOT infer additional facts.
+- Keep a neutral, non-accusatory tone.
+"""
                 },
                 {
                     "role": "user",
                     "content": f"""
-        Screening results (final values only):
-        {json.dumps(results, indent=2)}
+Screening results:
+{json.dumps(results, indent=2)}
 
-        Number of bids: {len(bids)}
+Number of bids: {len(final_bids)}
 
-        Explain what these results MAY indicate in the context of a public tender.
-        Do NOT explain how the indicators are calculated.
-        """
+Explain what these indicators MAY suggest.
+"""
                 }
             ],
             max_tokens=250
         )
 
-        explanation_text = (
-            explanation_completion.choices[0].message.content.strip()
-        )
+        explanation = explanation_completion.choices[0].message.content.strip()
+        print("[PLANNER] Explanation generated")
 
         # ----------------------------------------------
-        # STEP 8: final structured response
+        # STEP 9: FINAL RESPONSE
         # ----------------------------------------------
+        print("[PLANNER] Screening completed successfully")
+
         return {
             "ok": True,
+            "mode": "screening",
             "metrics": results,
-            "explanation": explanation_text,
+            "explanation": explanation,
             "meta": {
-                "n_bids": len(bids),
-                "currency": payload.get("currency"),
+                "n_bids": len(final_bids),
+                "currency": consolidated.get("currency"),
+                "confidence": consolidated.get("confidence"),
+                "decisions": consolidated.get("decisions"),
                 "source_docs": payload.get("source_docs"),
-                "confidence": payload.get("confidence")
+            }
+        }
+
+        # ----------------------------------------------
+        # FALLBACK (SHOULD NEVER HAPPEN)
+        # ----------------------------------------------
+        print("[PLANNER] ❌ Reached unexpected end of planner.run")
+
+        return {
+            "ok": False,
+            "error": "Planner reached an unexpected state",
+            "debug": {
+                "query": query,
+                "intent": intent,
+                "metrics": requested_metrics
             }
         }

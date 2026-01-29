@@ -1,86 +1,98 @@
-# vectorstore/chroma_store.py
 import chromadb
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 import uuid
 
 
 class ChromaVectorStore:
     """
-    Almacén vectorial persistente en ChromaDB.
-    Compatible con fragmentos de texto y visuales (multimodales) sin depender de etiquetas fijas.
-    Incluye saneamiento automático y metadatos generalistas.
+    Almacén vectorial persistente consciente de estructura documental.
+    Soporta múltiples embeddings por documento según el modo de uso.
     """
 
-    def __init__(self, persist_directory: str = "data/chroma", collection_name: str = "rag_docs_general"):
+    def __init__(
+        self,
+        persist_directory: str = "data/chroma",
+        collection_name: str = "rag_docs_general",
+        embedding_mode: str = "index",
+    ):
         self.persist_directory = persist_directory
         self.collection_name = collection_name
+        self.embedding_mode = embedding_mode
 
-        # Inicialización de cliente persistente
         self.client = chromadb.PersistentClient(path=self.persist_directory)
         self.collection = self._get_or_create_collection(self.collection_name)
 
-        print(f"[CHROMA] ✅ Conectado a la base persistente: {self.persist_directory}")
+        print(f"[CHROMA] Conectado a: {self.persist_directory}")
         print(f"[CHROMA] Colección activa: {self.collection.name}")
+        print(f"[CHROMA] Modo de embedding: {self.embedding_mode}")
 
-    # -------------------------------------------------------------------------
-    # 1. CREACIÓN O RECUPERACIÓN DE COLECCIÓN
-    # -------------------------------------------------------------------------
+    # --------------------------------------------------
+    # Colección
+    # --------------------------------------------------
     def _get_or_create_collection(self, name: str):
-        existing = [c.name for c in self.client.list_collections()]
+        existing = {c.name for c in self.client.list_collections()}
         if name in existing:
-            print(f"[CHROMA] Usando colección existente: {name}")
             return self.client.get_collection(name)
-        print(f"[CHROMA] Creando nueva colección: {name}")
         return self.client.create_collection(name)
 
-    # -------------------------------------------------------------------------
-    # 2. SANITIZADOR DE METADATOS
-    # -------------------------------------------------------------------------
+    # --------------------------------------------------
+    # Sanitización
+    # --------------------------------------------------
     def _sanitize_metadata(self, meta: Dict[str, Any]) -> Dict[str, Any]:
-        """Asegura que todos los valores sean válidos para Chroma (no None, no objetos)."""
         clean = {}
         for k, v in meta.items():
             if v is None:
-                clean[k] = "desconocido"
-            elif isinstance(v, (int, float, bool, str)):
+                clean[k] = "unknown"
+            elif isinstance(v, (str, int, float, bool)):
                 clean[k] = v
             else:
                 clean[k] = str(v)
         return clean
 
-    # -------------------------------------------------------------------------
-    # 3. AÑADIR DOCUMENTOS / FRAGMENTOS
-    # -------------------------------------------------------------------------
+    # --------------------------------------------------
+    # Indexado
+    # --------------------------------------------------
     def add_documents(self, docs: List[Dict[str, Any]]):
         """
-        Agrega fragmentos con embeddings y metadatos al índice.
-        Espera docs con: content, embedding, source, type, page (opcional).
+        Espera documentos con:
+        - content
+        - embedding_<mode>
+        - type
+        - source
+        - page (opcional)
+        - confidence (opcional)
         """
+
         if not docs:
-            print("[CHROMA] ⚠️ Lista vacía: no se indexa nada.")
+            print("[CHROMA] Nada que indexar.")
             return
 
-        # IDs únicos: hash si existe, sino UUID
-        ids = [
-            d.get("hash") or f"{d.get('source', 'doc')}_{uuid.uuid4().hex[:8]}"
-            for d in docs
-        ]
-        texts = [d["content"] for d in docs]
-        embeddings = [d["embedding"] for d in docs]
+        embedding_key = f"embedding_{self.embedding_mode}"
 
-        metadatas = []
-        for d in docs:
+        valid_docs = [d for d in docs if embedding_key in d]
+        if not valid_docs:
+            print(f"[CHROMA] No hay embeddings '{embedding_key}'.")
+            return
+
+        ids, texts, embeddings, metadatas = [], [], [], []
+
+        for d in valid_docs:
+            doc_id = d.get("hash") or f"{d.get('source','doc')}_{uuid.uuid4().hex[:8]}"
+            ids.append(doc_id)
+
+            texts.append(d["content"])
+            embeddings.append(d[embedding_key])
+
             meta = {
-                "source": d.get("source", "desconocido"),
-                "type": d.get("type", "text"),
-                "page": d.get("page", "N/A"),
+                "source": d.get("source", "unknown"),
+                "type": d.get("type", "unknown"),
+                "page": d.get("page"),
+                "confidence": d.get("confidence", 1.0),
             }
             metadatas.append(self._sanitize_metadata(meta))
 
-        print(f"[CHROMA] Indexando {len(docs)} fragmentos (textuales y/o visuales)...")
-        print(f"[CHROMA] Ejemplo de texto embebido:\n{texts[0][:250].replace(chr(10), ' ')}")
+        print(f"[CHROMA] Indexando {len(ids)} documentos (modo={self.embedding_mode})")
 
-        # Inserción segura
         self.collection.add(
             ids=ids,
             documents=texts,
@@ -88,52 +100,57 @@ class ChromaVectorStore:
             metadatas=metadatas,
         )
 
-        total = self.collection.count()
-        print(f"[CHROMA] Total actual en colección '{self.collection.name}': {total}")
+        print(f"[CHROMA] Total en colección: {self.collection.count()}")
 
-    # -------------------------------------------------------------------------
-    # 4. CONSULTA DE DOCUMENTOS
-    # -------------------------------------------------------------------------
-    def query(self, query_embedding: List[float], query_text: str = "", top_k: int = 5, filter_type: str = None):
+    # --------------------------------------------------
+    # Consulta
+    # --------------------------------------------------
+    def query(
+        self,
+        query_embedding: List[float],
+        top_k: int = 5,
+        filter_types: Optional[List[str]] = None,
+        min_confidence: float = 0.0,
+    ):
         """
-        Recupera fragmentos más similares al embedding de consulta.
-        Puede aplicar un filtro explícito por tipo ("text", "figure") si se desea.
+        Recupera documentos similares respetando estructura.
         """
-        where_filter = None
-        if filter_type:
-            where_filter = {"type": filter_type}
-            print(f"[CHROMA] 🔎 Filtro manual: tipo = {filter_type}")
+
+        where = {}
+        if filter_types:
+            where["type"] = {"$in": filter_types}
+        if min_confidence > 0:
+            where["confidence"] = {"$gte": min_confidence}
 
         results = self.collection.query(
             query_embeddings=[query_embedding],
             n_results=top_k,
-            where=where_filter,
+            where=where if where else None,
         )
 
-        if not results.get("documents") or not results["documents"][0]:
-            print("[CHROMA] ⚠️ No se recuperaron fragmentos relevantes.")
-            return {"documents": [], "sources": [], "metadatas": []}
+        docs = results.get("documents", [[]])[0]
+        metas = results.get("metadatas", [[]])[0]
 
-        documents = results["documents"][0]
-        metadatas = results.get("metadatas", [[]])[0]
-        sources = [m.get("source", "desconocido") for m in metadatas]
+        if not docs:
+            print("[CHROMA] Sin resultados.")
+            return []
 
-        print(f"[CHROMA] Recuperados {len(documents)} fragmentos.")
-        if sources:
-            print(f"[CHROMA] Fuente top-1: {sources[0]}")
-        print(f"[CHROMA] Ejemplo top-1:\n{documents[0][:400].replace(chr(10), ' ')}\n")
+        print(f"[CHROMA] Recuperados {len(docs)} documentos.")
+        return [
+            {
+                "content": d,
+                "metadata": m,
+            }
+            for d, m in zip(docs, metas)
+        ]
 
-        return {"documents": documents, "sources": sources, "metadatas": metadatas}
-
-    # -------------------------------------------------------------------------
-    # 5. UTILIDADES
-    # -------------------------------------------------------------------------
-    def list_collections(self):
-        """Lista las colecciones disponibles en la base persistente."""
-        return [c.name for c in self.client.list_collections()]
-    
+    # --------------------------------------------------
+    # Utilidades
+    # --------------------------------------------------
     def reset_collection(self):
-        """Elimina la colección actual y crea una nueva vacía."""
         self.client.delete_collection(self.collection_name)
         self.collection = self.client.create_collection(self.collection_name)
         print(f"[CHROMA] Colección '{self.collection_name}' reiniciada.")
+
+    def list_collections(self):
+        return [c.name for c in self.client.list_collections()]

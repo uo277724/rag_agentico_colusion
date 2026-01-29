@@ -4,7 +4,7 @@ from retrieval.retriever import Retriever
 from retrieval.ranker import create_ranker
 from generation.generator import Generator
 
-# === Evaluación y refinamiento ===
+# Evaluación y refinamiento
 from evaluation.judge_paper import evaluate_with_criteria
 from evaluation.metrics_extended import compute_extended_metrics
 from evaluation.refiner import ResponseRefiner
@@ -15,27 +15,39 @@ import time
 
 class RAGQueryTool:
     """
-    Tool única que ejecuta el pipeline completo de RAG:
-      1. Recuperación
-      2. Re-ranking
-      3. Generación final con grounding
-      4. Evaluación + refinamiento (opcional)
+    Tool RAG DOCUMENTAL.
+
+    Ejecuta el pipeline completo:
+      1. Retrieval
+      2. Reranking
+      3. Generación con grounding
+      4. Evaluación
+      5. Refinamiento editorial (opcional)
+      6. Logging
+
+    NO calcula métricas numéricas.
+    NO infiere datos no presentes en el contexto.
     """
 
-    def __init__(self, embedder, vectorstore, generator_model="gpt-4o"):
+    def __init__(
+        self,
+        embedder,
+        vectorstore,
+        generator_model: str = "gpt-4o",
+        ranker_mode: str = "semantic",
+        final_k: int = 6,
+    ):
         self.embedder = embedder
         self.vectorstore = vectorstore
         self.generator = Generator(model_name=generator_model)
+        self.ranker_mode = ranker_mode
+        self.final_k = final_k
 
     def __call__(self, query: str):
         """
-        Ejecuta el pipeline completo del RAG.
+        Ejecuta el pipeline RAG documental.
 
-        SIEMPRE devuelve:
-        {
-            "answer": str,
-            "sources": list
-        }
+        Devuelve un payload enriquecido, apto para auditoría.
         """
 
         print("\n[RAG] ===============================")
@@ -44,67 +56,98 @@ class RAGQueryTool:
         # ======================================================
         # 1. RETRIEVAL
         # ======================================================
-        retriever = Retriever(self.embedder, self.vectorstore, top_k=25)
-        results = retriever.retrieve(query)
+        retriever = Retriever(
+            embedder=self.embedder,
+            vectorstore=self.vectorstore,
+        )
 
-        context = results.get("context", "").strip()
-        sources = results.get("sources", [])
+        docs = retriever.retrieve(query)
 
-        # ------------------------------------------------------
-        # GUARD 1: No hay documentación
-        # ------------------------------------------------------
-        if not context:
-            print("[RAG] No se recuperó ningún fragmento relevante")
-
+        if not docs:
             return {
+                "mode": "rag_documental",
                 "answer": (
                     "No dispongo de documentación cargada o relevante para "
-                    "responder a esta pregunta en este momento."
+                    "responder a esta pregunta."
                 ),
-                "sources": []
+                "sources": [],
+                "evaluation": None,
+                "metrics": None,
+                "refiner": None,
             }
 
-        # ======================================================
-        # 2. PREPARACIÓN + RERANKING
-        # ======================================================
-        docs_raw = [d for d in context.split("\n---\n") if d.strip()]
-
         # ------------------------------------------------------
-        # GUARD 2: Contexto inválido tras el split
+        # Construcción explícita de contexto y fuentes
         # ------------------------------------------------------
-        if not docs_raw:
-            print("[RAG] El contexto se ha quedado vacío tras el preprocesado")
+        context_chunks = []
+        sources = []
 
+        for d in docs:
+            if not isinstance(d, dict):
+                continue
+
+            content = d.get("content")
+            if content:
+                context_chunks.append(content)
+
+            meta = d.get("metadata", {})
+            if isinstance(meta, dict):
+                src = meta.get("source")
+                if src:
+                    sources.append(src)
+
+        context = "\n---\n".join(context_chunks).strip()
+        sources = list(set(sources))
+
+        if not context:
             return {
+                "mode": "rag_documental",
                 "answer": (
                     "La documentación disponible no contiene información "
                     "suficiente para responder a esta consulta."
                 ),
-                "sources": []
+                "sources": [],
+                "evaluation": None,
+                "metrics": None,
+                "refiner": None,
+            }
+
+        # ======================================================
+        # 2. RERANKING
+        # ======================================================
+        docs_raw = [d for d in context.split("\n---\n") if d.strip()]
+        if not docs_raw:
+            return {
+                "mode": "rag_documental",
+                "answer": (
+                    "La documentación disponible no contiene información "
+                    "suficiente para responder a esta consulta."
+                ),
+                "sources": sources,
+                "evaluation": None,
+                "metrics": None,
+                "refiner": None,
             }
 
         ranker = create_ranker(
-            mode="semantic",
+            mode=self.ranker_mode,
             embedder=self.embedder,
-            final_k=6,
+            final_k=self.final_k,
             verbose=False,
         )
 
-        ranked_docs = ranker.rerank(query, docs_raw)
-        ranked_docs = [d for d in ranked_docs if d.strip()]
-
-        # ------------------------------------------------------
-        # GUARD 3: Reranking sin resultados útiles
-        # ------------------------------------------------------
+        ranked_docs = [d for d in ranker.rerank(query, docs_raw) if d.strip()]
         if not ranked_docs:
-            print("[RAG] El reranker no devolvió documentos útiles")
-
             return {
+                "mode": "rag_documental",
                 "answer": (
                     "No se encontró información relevante en la documentación "
                     "para responder a esta pregunta."
                 ),
-                "sources": []
+                "sources": sources,
+                "evaluation": None,
+                "metrics": None,
+                "refiner": None,
             }
 
         ranked_context = "\n---\n".join(ranked_docs)
@@ -121,32 +164,28 @@ class RAGQueryTool:
         )
 
         end_time = time.time()
-
         answer = response.get("answer", "").strip()
 
-        # ------------------------------------------------------
-        # GUARD 4: El generador devolvió vacío
-        # ------------------------------------------------------
         if not answer:
-            print("[RAG] El generador devolvió una respuesta vacía")
-
             return {
+                "mode": "rag_documental",
                 "answer": (
                     "No fue posible generar una respuesta clara a partir "
                     "de la documentación disponible."
                 ),
-                "sources": sources
+                "sources": sources,
+                "evaluation": None,
+                "metrics": None,
+                "refiner": None,
             }
 
-        print("[RAG] Respuesta antes del refiner:\n", answer)
-
         # ======================================================
-        # 4. EVALUACIÓN + MÉTRICAS
+        # 4. EVALUACIÓN
         # ======================================================
         judge_result = evaluate_with_criteria(
             question=query,
             context=ranked_context,
-            answer=answer
+            answer=answer,
         )
 
         metrics_ext = compute_extended_metrics(
@@ -154,27 +193,26 @@ class RAGQueryTool:
             judge_result=judge_result,
             start_time=start_time,
             end_time=end_time,
-            model_name="gpt-4o"
+            model_name="gpt-4o",
         )
 
         # ======================================================
-        # 5. REFINER (opcional)
+        # 5. REFINAMIENTO EDITORIAL
         # ======================================================
         refiner = ResponseRefiner(
             model_name="gpt-4o-mini",
-            threshold=2.5
+            threshold=2.5,
         )
 
         refine_result = refiner.refine(
             question=query,
             context=ranked_context,
             answer=answer,
-            judge_result=judge_result
+            judge_result=judge_result,
         )
 
         if refine_result.get("status") == "refined":
             answer = refine_result.get("refined_answer", answer)
-            print("[RAG] Respuesta refinada aplicada")
 
         # ======================================================
         # 6. LOGGING
@@ -182,23 +220,26 @@ class RAGQueryTool:
         log_evaluation(
             judge_result=judge_result,
             metrics_ext=metrics_ext,
-            refine_result=refine_result
+            refine_result=refine_result,
         )
 
-        print("[RAG] Estado del refiner:", refine_result.get("status"))
-        print("[RAG] Respuesta final:\n", answer)
         print("[RAG] ===============================\n")
 
         return {
+            "mode": "rag_documental",
             "answer": answer,
-            "sources": sources
+            "sources": sources,
+            "evaluation": judge_result,
+            "metrics": metrics_ext,
+            "refiner": refine_result,
         }
 
 
 def build_rag_tools(embedder, vectorstore):
     """
-    Construye las herramientas RAG expuestas al planner.
+    Construye las herramientas RAG expuestas al ToolManager.
     """
+
     rag_query_tool = RAGQueryTool(embedder, vectorstore)
 
     return {

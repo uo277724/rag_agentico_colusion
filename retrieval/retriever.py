@@ -1,78 +1,70 @@
 # retrieval/retriever.py
+
 from embeddings.embedder import Embedder
 from vectorstore.chroma_store import ChromaVectorStore
+from typing import List, Dict, Any
 
 
 class Retriever:
-    """
-    Recupera contexto relevante desde el vector store usando embeddings semánticos.
-    Compatible con documentos multimodales (texto + visuales).
-    No depende de palabras o formatos específicos (p. ej., 'figura', 'ilustración', etc.).
-    """
-
-    def __init__(self, embedder: Embedder, vectorstore: ChromaVectorStore, top_k: int = 30):
+    def __init__(
+        self,
+        embedder: Embedder,
+        vectorstore: ChromaVectorStore,
+        top_k_primary: int = 8,
+        top_k_secondary: int = 20,
+        min_confidence: float = 0.0,
+    ):
         self.embedder = embedder
         self.vectorstore = vectorstore
-        self.top_k = top_k
+        self.top_k_primary = top_k_primary
+        self.top_k_secondary = top_k_secondary
+        self.min_confidence = min_confidence
 
-    # -------------------------------------------------------------------------
-    # Recuperación principal
-    # -------------------------------------------------------------------------
-    def retrieve(self, query: str, filter_type: str = None):
-        """
-        Recupera fragmentos relevantes para una consulta dada.
-        Puede aplicar un filtro opcional: filter_type ∈ {"text", "figure"}.
-        """
-        print("\n[RETRIEVER] ======================")
-        print(f"[RETRIEVER] Consulta recibida: {query}")
+    def _embed_query(self, query: str) -> List[float]:
+        query_doc = {"content": query}
+        embedded = self.embedder.embed_documents(
+            [query_doc],
+            mode="index"
+        )
+        return embedded[0]["embedding_index"]
 
-        # 1. Generar embedding de la consulta
-        query_embedding = self.embedder.embed_texts([query])[0]
-        print(f"[RETRIEVER] Dimensión del embedding: {len(query_embedding)}")
+    def _retrieve_once(
+        self,
+        query_embedding: List[float],
+        top_k: int,
+    ):
+        print("[RETRIEVER] Calling vectorstore.query(...)")
 
-        # 2. Ejecutar consulta vectorial
-        results = self.vectorstore.query(
+        result = self.vectorstore.query(
             query_embedding=query_embedding,
-            query_text=query,   # solo para logging interno
-            top_k=self.top_k,
-            filter_type=filter_type,
+            top_k=top_k,
         )
 
-        documents = results.get("documents", [])
-        sources = results.get("sources", [])
-        metadatas = results.get("metadatas", [])
-        num_docs = len(documents)
+        print("[RETRIEVER] Raw vectorstore.query result type:", type(result))
+        print("[RETRIEVER] Raw vectorstore.query result value:", result)
 
-        print(f"[RETRIEVER] Fragmentos recuperados: {num_docs}")
+        return result
 
-        if num_docs == 0:
-            print("[RETRIEVER] ⚠️ No se encontraron fragmentos relevantes.")
-            print("[RETRIEVER] ======================\n")
-            return {
-                "context": "",
-                "sources": [],
-                "metadatas": [],
-                "query_embedding": query_embedding.tolist(),
-            }
+    def retrieve(self, query: str):
+        print("\n[RETRIEVER] ======================")
+        print(f"[RETRIEVER] Consulta: {query}")
 
-        # 3. Vista previa (solo primeros 3)
-        for i in range(min(3, num_docs)):
-            meta = metadatas[i]
-            preview = documents[i][:400].replace("\n", " ")
-            print(f"[RETRIEVER] Fragmento {i+1} — Tipo: {meta.get('type', 'N/A')} | Página: {meta.get('page', 'N/A')}")
-            print(f"[RETRIEVER] Fuente: {meta.get('source', 'N/A')}")
-            print(f"[RETRIEVER] Contenido: {preview}")
-            print("---")
+        query_embedding = self._embed_query(query)
+        print(f"[RETRIEVER] Embedding generado (dim={len(query_embedding)})")
 
-        # 4. Construir contexto concatenado
-        context = "\n---\n".join(documents[:num_docs])
-        print(f"[RETRIEVER] Longitud total del contexto: {len(context)} caracteres")
-        print(f"[RETRIEVER] Fuentes únicas: {set(sources)}")
+        raw_result = self._retrieve_once(
+            query_embedding=query_embedding,
+            top_k=self.top_k_secondary,
+        )
+
+        if isinstance(raw_result, dict):
+            documents = raw_result.get("documents", [])
+        elif isinstance(raw_result, list):
+            documents = raw_result
+        else:
+            documents = []
+
+        print(f"[RETRIEVER] Normalized documents count: {len(documents)}")
         print("[RETRIEVER] ======================\n")
 
-        return {
-            "context": context,
-            "sources": sources[:num_docs],
-            "metadatas": metadatas[:num_docs],
-            "query_embedding": query_embedding.tolist(),
-        }
+        return documents

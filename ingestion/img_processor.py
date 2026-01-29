@@ -1,4 +1,3 @@
-# ingestion/image_processor.py
 import fitz  # PyMuPDF
 import base64
 import hashlib
@@ -14,9 +13,9 @@ load_dotenv()
 
 class ImageProcessor:
     """
-    Extrae imágenes de PDFs y genera descripciones textuales generales mediante un modelo visual-lingüístico.
-    No depende de pies de figura ni términos específicos.
-    Devuelve estructuras enriquecidas con coordenadas y descripciones listas para integrar con el texto.
+    Extrae imágenes de PDFs y genera descripciones visuales objetivas.
+    Las imágenes se tratan como nodos documentales independientes,
+    nunca como fuente primaria de información económica.
     """
 
     def __init__(
@@ -26,12 +25,12 @@ class ImageProcessor:
         min_height: int = 200,
         cache_path: str = "data/image_cache.json",
     ):
-        DEEPINFRA_TOKEN = os.getenv("DEEPINFRA_TOKEN")
-        if not DEEPINFRA_TOKEN:
+        token = os.getenv("DEEPINFRA_TOKEN")
+        if not token:
             raise ValueError("No se encontró la variable DEEPINFRA_TOKEN en el .env")
 
         self.client = OpenAI(
-            api_key=DEEPINFRA_TOKEN,
+            api_key=token,
             base_url="https://api.deepinfra.com/v1/openai",
         )
         self.model = model
@@ -40,16 +39,16 @@ class ImageProcessor:
         self.cache_path = cache_path
         self.cache = self._load_cache()
 
-    # ------------------------
+    # --------------------------------------------------
     # Cache helpers
-    # ------------------------
-    def _load_cache(self):
+    # --------------------------------------------------
+    def _load_cache(self) -> dict:
         if os.path.exists(self.cache_path):
             try:
                 with open(self.cache_path, "r", encoding="utf-8") as f:
                     return json.load(f)
             except Exception:
-                return {}
+                pass
         return {}
 
     def _save_cache(self):
@@ -58,35 +57,26 @@ class ImageProcessor:
             json.dump(self.cache, f, ensure_ascii=False, indent=2)
 
     def _hash_image(self, image_bytes: bytes) -> str:
-        """Devuelve un hash único para identificar imágenes repetidas."""
         return hashlib.md5(image_bytes).hexdigest()
 
-    # ------------------------
-    # Descripción de imagen (agnóstica)
-    # ------------------------
+    # --------------------------------------------------
+    # Descripción visual neutra
+    # --------------------------------------------------
     def _describe_image(self, image_bytes: bytes) -> str:
-        """
-        Genera una descripción textual general de la imagen.
-        No depende del dominio ni del tipo de contenido.
-        """
         image_hash = self._hash_image(image_bytes)
 
-        # Caché local
         if image_hash in self.cache:
-            print(f"[IMG] Descripción recuperada de caché ({image_hash[:8]}...)")
             return self.cache[image_hash]
 
         try:
             base64_image = base64.b64encode(image_bytes).decode("utf-8")
-            prompt = """
-            Describe detalladamente esta imagen de manera objetiva, sin hacer suposiciones.
-            Incluye lo siguiente en un único bloque de texto:
-            - Qué se observa en términos generales.
-            - Qué elementos, estructuras o dispositivos son visibles.
-            - Cómo se distribuyen espacialmente los componentes.
-            - Cualquier texto o indicador visible (si lo hubiera).
-            - Sin numeraciones ni listas, solo descripción continua en lenguaje técnico y neutral.
-            """
+
+            prompt = (
+                "Describe esta imagen de forma objetiva y técnica.\n"
+                "No hagas inferencias ni interpretaciones.\n"
+                "Limítate a lo visualmente observable, incluyendo texto visible si lo hay.\n"
+                "Usa un único párrafo descriptivo."
+            )
 
             response = self.client.chat.completions.create(
                 model=self.model,
@@ -110,22 +100,25 @@ class ImageProcessor:
             description = response.choices[0].message.content.strip()
             self.cache[image_hash] = description
             self._save_cache()
-            print(f"[IMG] Nueva descripción generada ({image_hash[:8]}...)")
             return description
 
         except Exception as e:
             print(f"[IMG] Error describiendo imagen: {e}")
             return ""
 
-    # ------------------------
-    # Procesamiento completo PDF
-    # ------------------------
+    # --------------------------------------------------
+    # Procesamiento completo de imágenes en PDF
+    # --------------------------------------------------
     def process_pdf_images(self, file_path: str) -> list[dict]:
         """
-        Extrae imágenes del PDF con coordenadas, dimensiones y descripciones.
-        Devuelve lista de dicts con:
+        Devuelve imágenes como nodos documentales independientes:
         {
-            page, x0, y0, x1, y1, description, hash, index
+            type: "figure",
+            page,
+            bbox,
+            description,
+            hash,
+            confidence
         }
         """
         print(f"[IMG] Analizando imágenes en {file_path} ...")
@@ -135,17 +128,16 @@ class ImageProcessor:
         try:
             with fitz.open(file_path) as pdf:
                 for page_index, page in enumerate(pdf):
-                    images = page.get_images(full=True)
-                    if not images:
-                        continue
-
-                    for img_index, img in enumerate(images):
+                    for img_index, img in enumerate(page.get_images(full=True)):
                         xref = img[0]
                         base_image = pdf.extract_image(xref)
-                        image_bytes = base_image["image"]
+                        image_bytes = base_image.get("image", b"")
+
+                        if not image_bytes:
+                            continue
+
                         width = base_image.get("width", 0)
                         height = base_image.get("height", 0)
-
                         if width < self.min_width or height < self.min_height:
                             continue
 
@@ -154,7 +146,7 @@ class ImageProcessor:
                             continue
                         processed_hashes.add(image_hash)
 
-                        # Convertir a PNG (para consistencia)
+                        # Normalizar formato
                         try:
                             pil_img = Image.open(BytesIO(image_bytes))
                             buffer = BytesIO()
@@ -163,36 +155,25 @@ class ImageProcessor:
                         except Exception:
                             pass
 
-                        # Obtener coordenadas visuales
                         rects = page.get_image_rects(xref)
                         if not rects:
                             continue
                         rect = rects[0]
 
-                        # Generar descripción textual
                         description = self._describe_image(image_bytes)
                         if not description:
                             continue
 
-                        image_info = {
+                        results.append({
+                            "type": "figure",
                             "page": page_index + 1,
-                            "x0": rect.x0,
-                            "y0": rect.y0,
-                            "x1": rect.x1,
-                            "y1": rect.y1,
-                            "hash": image_hash,
-                            "index": img_index + 1,
+                            "bbox": [rect.x0, rect.y0, rect.x1, rect.y1],
                             "description": description,
-                        }
+                            "hash": image_hash,
+                            "confidence": 0.2  # Nunca fuente primaria
+                        })
 
-                        results.append(image_info)
-
-                        print(
-                            f"[IMG] Imagen descrita (pág. {page_index + 1}): "
-                            f"{description[:120].replace(chr(10),' ')}"
-                        )
-
-            print(f"[IMG] Total de imágenes descritas: {len(results)}")
+            print(f"[IMG] Total de imágenes procesadas: {len(results)}")
             return results
 
         except Exception as e:

@@ -1,136 +1,113 @@
-# evaluation/metrics_extended.py
 """
-Módulo de métricas extendidas inspirado en el artículo de evaluación de LLMs.
-Calcula métricas cuantitativas adicionales para analizar la calidad y eficiencia del sistema RAG.
-
-Incluye:
-- Execution time
-- Cost (estimado)
-- Narrative length
-- Informativeness (número de puntos de información distintos)
-- Accuracy (si se dispone de etiquetas)
-- Accurate Narrative Information Density (ANID)
-- Métricas de legibilidad: FRE, FKGL, ARI
+Métricas extendidas para sistemas RAG analíticos y conservadores.
+Diseñadas para entornos auditables (contratación pública, colusión, compliance).
 """
 
 import time
-import re
-import textstat
 import numpy as np
+import textstat
 
 
 # ============================================================
-# FUNCIONES PRINCIPALES
+# MÉTRICAS PRINCIPALES
 # ============================================================
 
-def compute_extended_metrics(answer: str, judge_result: dict, start_time=None, end_time=None, model_name="gpt-4o"):
-    """
-    Calcula métricas extendidas del sistema RAG, inspiradas en el artículo.
-    
-    Parámetros:
-        answer (str): Respuesta generada por el modelo.
-        judge_result (dict): Resultado del módulo judge_paper (clarity, relevance, etc.).
-        start_time (float, opcional): Timestamp al inicio de la generación.
-        end_time (float, opcional): Timestamp al final de la generación.
-        model_name (str): Nombre del modelo (para estimar el coste).
-
-    Retorna:
-        dict con las métricas calculadas.
-    """
-
-    # -------------------------
+def compute_extended_metrics(
+    answer: str,
+    judge_result: dict,
+    start_time=None,
+    end_time=None,
+    model_name="gpt-4o-mini",
+):
+    # --------------------------------------------------
     # Execution time
-    # -------------------------
-    if start_time and end_time:
-        execution_time = round(end_time - start_time, 3)
-    else:
-        execution_time = None
+    # --------------------------------------------------
+    execution_time = (
+        round(end_time - start_time, 3)
+        if start_time and end_time
+        else None
+    )
 
-    # -------------------------
-    # Cost estimation (USD) — actualizado para GPT-4o y GPT-4o-mini (2025)
-    # -------------------------
+    # --------------------------------------------------
+    # Cost estimation (aprox.)
+    # --------------------------------------------------
     words = len(answer.split())
     est_tokens = int(words / 0.75)
 
-    # Precios oficiales (USD por token)
     prices = {
-        "gpt-4o": {"input": 5.00e-6, "output": 15.00e-6},
-        "gpt-4o-mini": {"input": 0.60e-6, "output": 2.40e-6},
+        "gpt-4o": 10.00e-6,
+        "gpt-4o-mini": 1.50e-6,
     }
 
     m = next((k for k in prices if k in model_name.lower()), "gpt-4o-mini")
-    cost_per_token = np.mean(list(prices[m].values()))
+    cost_usd = est_tokens * prices[m]
+    cost_cents = round(cost_usd * 100, 4)
 
-    cost_usd = round(est_tokens * cost_per_token, 5)
-    cost_cents = round(cost_usd * 100, 3)
-
-    # -------------------------
+    # --------------------------------------------------
     # Narrative length
-    # -------------------------
+    # --------------------------------------------------
     narrative_length = words
 
-    # -------------------------
-    # Informativeness (conteo de ideas)
-    # -------------------------
-    # Aproximación: número de oraciones que contienen un verbo técnico
-    technical_verbs = ["controla", "mide", "regula", "indica", "opera", "calienta",
-                       "ajusta", "funciona", "representa", "activa", "desactiva", "supervisa"]
-    sentences = re.split(r'[.!?]+', answer)
-    info_points = sum(any(v in s.lower() for v in technical_verbs) for s in sentences if len(s.strip()) > 5)
+    # --------------------------------------------------
+    # Faithfulness & Traceability (from judge)
+    # --------------------------------------------------
+    faithfulness = judge_result.get("Faithfulness", 0) / 4
+    traceability = judge_result.get("Traceability", 0) / 4
 
-    # -------------------------
-    # Accuracy (si hubiera etiquetas de verdad)
-    # -------------------------
-    # Placeholder: si judge_result trae Insightfulness y Relevance, se usa como proxy
-    factual_accuracy = round(
-        np.mean([judge_result.get("Relevance", 0), judge_result.get("Insightfulness", 0)]) / 4, 3
+    issue_types = set(judge_result.get("Issue_types", []))
+
+    # Penalización explícita por inferencias
+    inference_penalty = 0.0
+    if "unsupported_inference" in issue_types:
+        inference_penalty = 0.3
+    if "analysis_error" in issue_types or "wrong_calculation" in issue_types:
+        inference_penalty = 0.6
+
+    safe_faithfulness = max(0.0, faithfulness - inference_penalty)
+
+    # --------------------------------------------------
+    # TSID — Traceable Statement Information Density
+    # --------------------------------------------------
+    # Proxy conservador:
+    # densidad = faithfulness * traceability / longitud
+    tsid = round(
+        (safe_faithfulness * traceability) * 100 / max(words, 1),
+        4
     )
 
-    # -------------------------
-    # ANID (Accurate Narrative Information Density)
-    # -------------------------
-    # Correct distinct info points por 100 palabras
-    anid = round((info_points / max(words, 1)) * 100, 3)
-
-    # -------------------------
-    # Readability metrics (adaptadas a español)
-    # -------------------------
+    # --------------------------------------------------
+    # Readability (secundaria)
+    # --------------------------------------------------
     try:
-        fre = textstat.flesch_reading_ease(answer)
+        fre = max(0, min(100, textstat.flesch_reading_ease(answer)))
         fkgl = textstat.flesch_kincaid_grade(answer)
         ari = textstat.automated_readability_index(answer)
-
-        # Ajuste heurístico para textos técnicos en español:
-        # FRE puede ser negativo o bajo; normalizamos a [0, 100]
-        fre_norm = max(0, min(100, fre))
-        # FKGL y ARI son grados escolares → invertimos para que "más fácil = más alto"
         clarity_grade = max(0, min(100, 100 - ((fkgl + ari) / 2)))
     except Exception:
-        fre_norm, fkgl, ari, clarity_grade = 0, 0, 0, 0
+        fre, fkgl, ari, clarity_grade = 0, 0, 0, 0
 
-    # -------------------------
-    # Resumen consolidado
-    # -------------------------
-    extended_metrics = {
+    # --------------------------------------------------
+    # Global Quality Index (conservador)
+    # --------------------------------------------------
+    global_quality_index = round(
+        0.4 * safe_faithfulness +
+        0.3 * traceability +
+        0.2 * (clarity_grade / 100) +
+        0.1 * (1 / max(words, 1)),
+        4
+    )
+
+    return {
         "execution_time_sec": execution_time,
         "cost_cents": cost_cents,
         "narrative_length_words": narrative_length,
-        "informativeness_points": info_points,
-        "accuracy_est": factual_accuracy,
-        "anid": anid,
-        "flesch_reading_ease": round(fre_norm, 2),
-        "flesch_kincaid_grade": round(fkgl, 2),
-        "automated_readability_index": round(ari, 2),
+        "faithfulness": round(faithfulness, 3),
+        "traceability": round(traceability, 3),
+        "safe_faithfulness": round(safe_faithfulness, 3),
+        "tsid": tsid,
+        "flesch_reading_ease": round(fre, 2),
         "clarity_grade": round(clarity_grade, 2),
+        "issue_types": list(issue_types),
         "model_name": model_name,
+        "global_quality_index": global_quality_index,
     }
-
-    # Métrica global combinada (ponderada)
-    extended_metrics["global_quality_index"] = round((
-        0.25 * factual_accuracy +
-        0.25 * (anid / 100) +
-        0.25 * (judge_result.get("Overall_score", 0) / 4) +
-        0.25 * (clarity_grade / 100)
-    ), 3)
-
-    return extended_metrics
