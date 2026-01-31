@@ -221,6 +221,7 @@ Return format:
             }
 
         payload = extraction.get("result", {})
+        source_refs = payload.get("source_refs", [])
 
         # ----------------------------------------------
         # STEP 5: CONSOLIDATE BIDS
@@ -290,55 +291,70 @@ Return format:
         # STEP 8: QUALITATIVE EXPLANATION (UNCHANGED)
         # ----------------------------------------------
         explanation_completion = self.client.chat.completions.create(
-            model="gpt-4o-mini",
-            temperature=0.1,
-            messages=[
-                {
-                    "role": "system",
-                    "content": """
-        You explain the outcome of a public tender screening analysis.
+        model="gpt-4o-mini",
+        temperature=0.1,
+        messages=[
+            {
+                "role": "system",
+                "content": """
+                You explain the outcome of a public tender screening analysis.
 
-        Your response MUST begin with a short, explicit summary of the requested indicators.
+                Your response MUST:
+                - Explicitly mention WHERE the bid data was found.
+                - Cite document name(s) and page number(s) when available.
+                - Refer to tables or sections if the semantic_type suggests it
+                (e.g. 'tabla_economica', 'oferta_economica').
 
-        STRUCTURE:
-        1. First paragraph:
-        - Explicitly state each requested indicator and its numeric value.
-        - Use clear, declarative language.
-        - One short paragraph only.
+                STRUCTURE:
+                1. First paragraph:
+                - Explicitly state each requested indicator and its numeric value.
 
-        2. Then explain:
-        - What data was used
-        - How many bids were considered
-        - How bids were selected and consolidated
-        - How reliable the data appears
-        - What the indicators MAY suggest
+                2. Data origin:
+                - Specify the document(s), page(s), and section/table where the bids appear.
 
-        RULES:
-        - Do NOT compute or derive new values
-        - Do NOT explain formulas
-        - Do NOT invent data
-        - Use ONLY the information provided
-        - Keep a neutral, professional, non-accusatory tone
-        """
+                3. Then explain:
+                - How many bids were considered
+                - How bids were selected and consolidated
+                - How reliable the data appears
+                - What the indicators MAY suggest
+
+                RULES:
+                - Do NOT compute or derive new values
+                - Do NOT invent sources or pages
+                - Use ONLY the provided references
+                - If a page is unknown, say so explicitly
+                - Neutral, professional tone
+                """
                 },
-                {
-                    "role": "user",
-                    "content": f"""
-        Requested metrics:
-        {json.dumps(results, indent=2)}
+            {
+                "role": "user",
+                "content": f"""
+                Requested screening indicators (already computed):
+                {json.dumps(results, indent=2)}
 
-        Number of bids: {len(final_bids)}
+                Number of valid bids considered: {len(final_bids)}
+                Currency: {result.get("currency")}
 
-        Consolidation decisions:
-        {json.dumps(decisions, indent=2)}
+                Bid selection and consolidation decisions:
+                {json.dumps(decisions, indent=2)}
 
-        Data reliability:
-        Overall confidence: {result.get("confidence")}
-        """
-                }
-            ],
-            max_tokens=300
-        )
+                Data origin references for extracted bids.
+                Each item includes:
+                - source: document filename
+                - page: page number (if available)
+                - semantic_type: section type (e.g. table, economic offer, annex)
+
+                References:
+                {json.dumps(source_refs, indent=2)}
+
+                Overall data confidence: {result.get("confidence")}
+
+                Explain the results following the required structure.
+                """
+            }
+        ],
+        max_tokens=300
+    )
 
         explanation = explanation_completion.choices[0].message.content.strip()
 
