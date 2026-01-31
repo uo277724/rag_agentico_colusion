@@ -226,7 +226,13 @@ Return format:
         # STEP 5: CONSOLIDATE BIDS
         # ----------------------------------------------
         consolidated = self.consolidator.consolidate(payload)
-        final_bids = consolidated.get("final_bids", [])
+
+        result = consolidated.get("result", {})
+        decisions = consolidated.get("decisions", [])
+        data = consolidated.get("data", {})
+
+        final_bids = result.get("final_bids", [])
+
 
         if not final_bids:
             explanation = self._generate_unfeasible_explanation(
@@ -266,8 +272,9 @@ Return format:
                         "metric": metric,
                         "n_bids": len(final_bids),
                         "min_required": min_n,
-                        "currency": consolidated.get("currency"),
-                        "decisions": consolidated.get("decisions"),
+                        "currency": result.get("currency"),
+                        "decisions": decisions,
+                        "data": data,
                     }
                 }
 
@@ -289,25 +296,25 @@ Return format:
                 {
                     "role": "system",
                     "content": """
-You interpret FINAL screening indicators ONLY.
+                    You interpret FINAL screening indicators ONLY.
 
-RULES:
-- Do NOT compute or derive anything.
-- Do NOT explain formulas.
-- Do NOT infer additional facts.
-- Keep a neutral, non-accusatory tone.
-"""
-                },
-                {
-                    "role": "user",
-                    "content": f"""
-Screening results:
-{json.dumps(results, indent=2)}
+                    RULES:
+                    - Do NOT compute or derive anything.
+                    - Do NOT explain formulas.
+                    - Do NOT infer additional facts.
+                    - Keep a neutral, non-accusatory tone.
+                    """
+                                    },
+                                    {
+                                        "role": "user",
+                                        "content": f"""
+                    Screening results:
+                    {json.dumps(results, indent=2)}
 
-Number of bids: {len(final_bids)}
+                    Number of bids: {len(final_bids)}
 
-Explain what these indicators MAY suggest.
-"""
+                    Explain what these indicators MAY suggest.
+                    """
                 }
             ],
             max_tokens=250
@@ -325,9 +332,10 @@ Explain what these indicators MAY suggest.
             "explanation": explanation,
             "meta": {
                 "n_bids": len(final_bids),
-                "currency": consolidated.get("currency"),
-                "confidence": consolidated.get("confidence"),
-                "decisions": consolidated.get("decisions"),
-                "source_docs": payload.get("source_docs"),
+                "currency": result.get("currency"),
+                "confidence": result.get("confidence"),
+                "decisions": decisions,
+                "data": data,
             }
         }
+
