@@ -296,28 +296,48 @@ Return format:
                 {
                     "role": "system",
                     "content": """
-                    You interpret FINAL screening indicators ONLY.
+        You explain the outcome of a public tender screening analysis.
 
-                    RULES:
-                    - Do NOT compute or derive anything.
-                    - Do NOT explain formulas.
-                    - Do NOT infer additional facts.
-                    - Keep a neutral, non-accusatory tone.
-                    """
-                                    },
-                                    {
-                                        "role": "user",
-                                        "content": f"""
-                    Screening results:
-                    {json.dumps(results, indent=2)}
+        Your response MUST begin with a short, explicit summary of the requested indicators.
 
-                    Number of bids: {len(final_bids)}
+        STRUCTURE:
+        1. First paragraph:
+        - Explicitly state each requested indicator and its numeric value.
+        - Use clear, declarative language.
+        - One short paragraph only.
 
-                    Explain what these indicators MAY suggest.
-                    """
+        2. Then explain:
+        - What data was used
+        - How many bids were considered
+        - How bids were selected and consolidated
+        - How reliable the data appears
+        - What the indicators MAY suggest
+
+        RULES:
+        - Do NOT compute or derive new values
+        - Do NOT explain formulas
+        - Do NOT invent data
+        - Use ONLY the information provided
+        - Keep a neutral, professional, non-accusatory tone
+        """
+                },
+                {
+                    "role": "user",
+                    "content": f"""
+        Requested metrics:
+        {json.dumps(results, indent=2)}
+
+        Number of bids: {len(final_bids)}
+
+        Consolidation decisions:
+        {json.dumps(decisions, indent=2)}
+
+        Data reliability:
+        Overall confidence: {result.get("confidence")}
+        """
                 }
             ],
-            max_tokens=250
+            max_tokens=300
         )
 
         explanation = explanation_completion.choices[0].message.content.strip()

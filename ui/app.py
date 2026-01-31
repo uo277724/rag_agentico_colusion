@@ -54,15 +54,6 @@ def render_screening_result(result: dict):
                 st.warning("No se han devuelto métricas.")
                 return
 
-            # Métrica integrada como texto (esto lo mantenemos)
-            for metric, data in metrics.items():
-                if isinstance(data, dict) and "value" in data:
-                    value = round(data["value"], 4)
-                    st.markdown(
-                        f"El **{metric.upper()}** es **{value}**, "
-                        f"lo que se interpreta de la siguiente forma:"
-                    )
-
             if explanation:
                 st.markdown(explanation)
 
