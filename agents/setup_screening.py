@@ -18,6 +18,15 @@ from agents.calculation.kstest import KSTestAgent
 # Planner
 from agents.planner import ScreeningPlannerAgent
 
+# Lazy Semantic Typer
+from retrieval.lazy_semantic_typer import LazySemanticTyper
+
+# Inicialización del Lazy Semantic Typer
+lazy_typer = LazySemanticTyper(
+    model="gpt-4o-mini",
+    max_chunks=20,
+    debug=True,
+)
 
 def initialize_screening_agentic(embedder, vectorstore):
     """
@@ -51,11 +60,11 @@ def initialize_screening_agentic(embedder, vectorstore):
     tool_manager = ToolManager(debug=True)
 
     # RAG narrativo
-    rag_tools = build_rag_tools(embedder, vectorstore)
+    rag_tools = build_rag_tools(embedder, vectorstore, lazy_typer=lazy_typer)
     tool_manager.register("rag_query", rag_tools["rag_query"])
 
     # RAG extractivo (bids)
-    rag_extract_bids_tool = RAGExtractBidsTool(embedder, vectorstore)
+    rag_extract_bids_tool = RAGExtractBidsTool(embedder, vectorstore , lazy_typer=lazy_typer)
     tool_manager.register("rag_extract_bids", rag_extract_bids_tool)
 
     # ---------------------------

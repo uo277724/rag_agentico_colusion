@@ -1,5 +1,3 @@
-# agentic/tools/rag_tools.py
-
 from retrieval.retriever import Retriever
 from retrieval.ranker import create_ranker
 from generation.generator import Generator
@@ -17,6 +15,9 @@ class RAGQueryTool:
     Tool RAG DOCUMENTAL.
     Mantiene pipeline basado en texto plano,
     pero es compatible con rankers que esperan dicts.
+
+    El tipado semántico perezoso (lazy_typer) se usa
+    SOLO como enriquecimiento del retrieval.
     """
 
     def __init__(
@@ -26,12 +27,14 @@ class RAGQueryTool:
         generator_model: str = "gpt-4o",
         ranker_mode: str = "semantic",
         final_k: int = 6,
+        lazy_typer=None,
     ):
         self.embedder = embedder
         self.vectorstore = vectorstore
         self.generator = Generator(model_name=generator_model)
         self.ranker_mode = ranker_mode
         self.final_k = final_k
+        self.lazy_typer = lazy_typer
 
     def __call__(self, query: str):
 
@@ -39,11 +42,12 @@ class RAGQueryTool:
         print("[RAG] Query recibida:", query)
 
         # ======================================================
-        # 1. RETRIEVAL
+        # 1. RETRIEVAL (con tipado perezoso opcional)
         # ======================================================
         retriever = Retriever(
             embedder=self.embedder,
             vectorstore=self.vectorstore,
+            lazy_typer=self.lazy_typer,
         )
 
         docs = retriever.retrieve(query)
@@ -59,7 +63,7 @@ class RAGQueryTool:
             }
 
         # ======================================================
-        # 2. CONTEXTO PLANO (COMO ANTES)
+        # 2. CONTEXTO PLANO
         # ======================================================
         context_chunks = []
         sources = []
@@ -92,7 +96,7 @@ class RAGQueryTool:
             }
 
         # ======================================================
-        # 3. RERANKING (PARCHE COMPATIBLE)
+        # 3. RERANKING (compatibilidad total)
         # ======================================================
         docs_raw = [d for d in context.split("\n---\n") if d.strip()]
 
@@ -106,8 +110,11 @@ class RAGQueryTool:
                 "refiner": None,
             }
 
-        # WRAP: str -> dict (solo para el ranker)
-        docs_for_ranker = [{"content": d, "metadata": {}} for d in docs_raw]
+        # WRAP: str → dict (solo para el ranker)
+        docs_for_ranker = [
+            {"content": d, "metadata": {}}
+            for d in docs_raw
+        ]
 
         ranker = create_ranker(
             mode=self.ranker_mode,
@@ -128,9 +135,10 @@ class RAGQueryTool:
                 "refiner": None,
             }
 
-        # UNWRAP: dict -> str (como antes)
+        # UNWRAP: dict → str
         ranked_docs = [
-            d["content"] for d in ranked_wrapped
+            d["content"]
+            for d in ranked_wrapped
             if isinstance(d, dict) and d.get("content")
         ]
 
@@ -212,7 +220,12 @@ class RAGQueryTool:
             "refiner": refine_result,
         }
 
-def build_rag_tools(embedder, vectorstore):
+
+def build_rag_tools(embedder, vectorstore, lazy_typer=None):
     return {
-        "rag_query": RAGQueryTool(embedder, vectorstore)
+        "rag_query": RAGQueryTool(
+            embedder=embedder,
+            vectorstore=vectorstore,
+            lazy_typer=lazy_typer,
+        )
     }

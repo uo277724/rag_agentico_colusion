@@ -1,6 +1,4 @@
-# agents/tools/rag_extract_bids.py
-
-from typing import Dict, Any, List, Union
+from typing import Dict, Any, List
 from openai import OpenAI
 from retrieval.retriever import Retriever
 import json
@@ -11,9 +9,10 @@ class RAGExtractBidsTool:
     RAG tool for extracting bid hypotheses from tender documentation.
     """
 
-    def __init__(self, embedder, vectorstore):
+    def __init__(self, embedder, vectorstore, lazy_typer=None):
         self.embedder = embedder
         self.vectorstore = vectorstore
+        self.lazy_typer = lazy_typer   # ⬅️ NUEVO
         self.client = OpenAI()
 
     def __call__(self, query: str) -> Dict[str, Any]:
@@ -27,6 +26,7 @@ class RAGExtractBidsTool:
         retriever = Retriever(
             embedder=self.embedder,
             vectorstore=self.vectorstore,
+            lazy_typer=self.lazy_typer,
         )
 
         raw_results = retriever.retrieve(query)
@@ -43,18 +43,13 @@ class RAGExtractBidsTool:
         context_chunks: List[str] = []
 
         for r in raw_results:
-            if isinstance(r, str):
-                context_chunks.append(r)
-
-            elif isinstance(r, list):
-                for item in r:
-                    if isinstance(item, str):
-                        context_chunks.append(item)
-
-            elif isinstance(r, dict):
+            if isinstance(r, dict):
                 content = r.get("content")
                 if isinstance(content, str):
                     context_chunks.append(content)
+
+            elif isinstance(r, str):
+                context_chunks.append(r)
 
         context_chunks = [c.strip() for c in context_chunks if c.strip()]
         context = "\n---\n".join(context_chunks)
@@ -165,7 +160,8 @@ Extract bid candidates.
             "bids": normalized,
             "confidence": avg_confidence,
         }
-    
+
+
 def _strip_markdown_fences(text: str) -> str:
     text = text.strip()
     if text.startswith("```"):
