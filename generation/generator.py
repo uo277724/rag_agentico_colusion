@@ -38,8 +38,12 @@ class Generator:
         # 1. Estructurar contexto
         # =====================================================
         structured_context = "\n\n".join(
-            [f"[Fragmento {i+1}]\n{frag.strip()}"
-             for i, frag in enumerate(context.split('---')) if frag.strip()]
+            [
+                f"[Fragmento {i+1} | Fuente: {sources[i] if i < len(sources) else 'desconocida'}]\n"
+                f"{frag.strip()}"
+                for i, frag in enumerate(context.split('---'))
+                if frag.strip()
+            ]
         )
 
         max_context_chars = 18000
@@ -51,6 +55,12 @@ class Generator:
         # =====================================================
         system_prompt = (
             "Eres un asistente experto en análisis y comprensión documental. "
+            "RESPONDES SIEMPRE con trazabilidad documental. "
+            "Cuando proporciones una respuesta, DEBES indicar explícitamente: "
+            "- el documento de origen, "
+            "- el número de página (si aparece en el fragmento), "
+            "- y el tipo de sección o tabla si se menciona. "
+            "No inventes referencias ni páginas. "
             "Tu tarea es responder preguntas basándote únicamente en los fragmentos proporcionados. "
             "Los fragmentos pueden contener texto descriptivo, información técnica o descripciones de elementos visuales. "
             "Analiza su contenido globalmente, identifica las partes relevantes y genera una respuesta clara y fundamentada. "
@@ -66,7 +76,9 @@ class Generator:
             "Redacta una respuesta precisa, clara y basada exclusivamente en los fragmentos anteriores. "
             "Si la respuesta se apoya en contenido visual descrito (como diagramas o esquemas), "
             "menciónalo brevemente sin afirmar cosas no observadas. "
-            "Finaliza indicando las fuentes utilizadas entre paréntesis."
+            "Indica explícitamente en el texto de la respuesta "
+            "de qué documento, página o fragmento procede cada afirmación relevante. "
+            "No uses referencias genéricas como 'Fragmento X' si hay información más concreta."
         )
 
         # =====================================================

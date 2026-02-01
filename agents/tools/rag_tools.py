@@ -73,8 +73,24 @@ class RAGQueryTool:
                 continue
 
             content = d.get("content")
+            meta = d.get("metadata", {})
+
             if content:
-                context_chunks.append(content)
+                source = meta.get("source", "desconocido")
+                page = meta.get("page")
+                semantic_type = meta.get("semantic_type")
+
+                header_parts = [f"Fuente: {source}"]
+                if page is not None:
+                    header_parts.append(f"página {page}")
+                if semantic_type:
+                    header_parts.append(f"sección {semantic_type}")
+
+                header = " | ".join(header_parts)
+
+                context_chunks.append(
+                    f"[{header}]\n{content}"
+                )
 
             meta = d.get("metadata", {})
             if isinstance(meta, dict):

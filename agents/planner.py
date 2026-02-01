@@ -36,25 +36,25 @@ class ScreeningPlannerAgent:
     # --------------------------------------------------
     def _system_prompt(self) -> str:
         return """
-You are a STRICT SCREENING INTENT CLASSIFIER.
+        You are a STRICT SCREENING INTENT CLASSIFIER.
 
-TASK:
-1. Determine whether the user requests:
-   - DOCUMENTATION-ONLY information
-   - NUMERICAL SCREENING of bids
+        TASK:
+        1. Determine whether the user requests:
+        - DOCUMENTATION-ONLY information
+        - NUMERICAL SCREENING of bids
 
-2. If screening is requested, map to SUPPORTED METRICS ONLY.
+        2. If screening is requested, map to SUPPORTED METRICS ONLY.
 
-SUPPORTED METRICS:
-- cv, spd, diffp, rd, kurt, skew, kstest
+        SUPPORTED METRICS:
+        - cv, spd, diffp, rd, kurt, skew, kstest
 
-RULES:
-- Return ONLY a JSON object.
-- Do NOT invent metrics.
-- Do NOT compute anything.
-- If screening intent exists but no supported metrics apply,
-  return intent="screening" and metrics=[].
-"""
+        RULES:
+        - Return ONLY a JSON object.
+        - Do NOT invent metrics.
+        - Do NOT compute anything.
+        - If screening intent exists but no supported metrics apply,
+        return intent="screening" and metrics=[].
+        """
 
     # --------------------------------------------------
     # Helper: generate explanation when calculation is not possible
@@ -122,15 +122,15 @@ RULES:
                 {
                     "role": "user",
                     "content": f"""
-User query:
-\"\"\"{query}\"\"\" 
+                    User query:
+                    \"\"\"{query}\"\"\" 
 
-Return format:
-{{
-  "intent": "rag" | "screening",
-  "metrics": ["cv", "rd", ...]
-}}
-"""
+                    Return format:
+                    {{
+                    "intent": "rag" | "screening",
+                    "metrics": ["cv", "rd", ...]
+                    }}
+                    """
                 }
             ],
             max_tokens=200
@@ -298,6 +298,9 @@ Return format:
                 "role": "system",
                 "content": """
                 You explain the outcome of a public tender screening analysis.
+
+                - You MUST NOT assume whether amounts include or exclude VAT.
+                - VAT handling must be described ONLY using the provided consolidation decisions.
 
                 Your response MUST:
                 - Explicitly mention WHERE the bid data was found.
