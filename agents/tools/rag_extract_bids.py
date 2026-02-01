@@ -97,38 +97,38 @@ class RAGExtractBidsTool:
                 {
                     "role": "system",
                     "content": """
-You are a STRICT BID EXTRACTION AGENT.
+                    You are a STRICT BID EXTRACTION AGENT.
 
-TASK:
-- Identify ALL distinct economic bids explicitly stated in the text.
-- A bid is a price offered by a bidder for the contract.
-- Ignore budgets, guarantees, penalties, thresholds, estimates, or references.
-- Distinguish between different bidders if possible.
-- Distinguish tax-inclusive vs tax-exclusive amounts IF explicitly stated.
-- Do NOT infer or calculate missing values.
-- Do NOT merge amounts.
-- If information is ambiguous, include it with low confidence.
+                    TASK:
+                    - Identify ALL distinct economic bids explicitly stated in the text.
+                    - A bid is a price offered by a bidder for the contract.
+                    - Ignore budgets, guarantees, penalties, thresholds, estimates, or references.
+                    - Distinguish between different bidders if possible.
+                    - Distinguish tax-inclusive vs tax-exclusive amounts IF explicitly stated.
+                    - Do NOT infer or calculate missing values.
+                    - Do NOT merge amounts.
+                    - If information is ambiguous, include it with low confidence.
 
-OUTPUT:
-Return ONLY a valid JSON array.
+                    OUTPUT:
+                    Return ONLY a valid JSON array.
 
-Each element must have:
-- bidder (string or null)
-- amount (number)
-- currency (string or null)
-- tax_included (true | false | null)
-- source_excerpt (string)
-- confidence (number between 0 and 1)
-"""
+                    Each element must have:
+                    - bidder (string or null)
+                    - amount (number)
+                    - currency (string or null)
+                    - tax_included (true | false | null)
+                    - source_excerpt (string)
+                    - confidence (number between 0 and 1)
+                    """
                 },
                 {
                     "role": "user",
                     "content": f"""
-DOCUMENT TEXT:
-\"\"\"{context}\"\"\" 
+                    DOCUMENT TEXT:
+                    \"\"\"{context}\"\"\" 
 
-Extract bid candidates.
-"""
+                    Extract bid candidates.
+                    """
                 }
             ],
             max_tokens=1200

@@ -220,7 +220,7 @@ class RAGQueryTool:
             "refiner": refine_result,
         }
 
-
+# Construcción del conjunto de herramientas RAG
 def build_rag_tools(embedder, vectorstore, lazy_typer=None):
     return {
         "rag_query": RAGQueryTool(

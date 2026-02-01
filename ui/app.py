@@ -3,7 +3,7 @@ import time
 import streamlit as st
 
 # ==========================================================
-# INGESTIÓN + EMBEDDINGS
+# INGESTION + EMBEDDINGS
 # ==========================================================
 from ingestion.loader import process_file
 from embeddings.embedder import Embedder
@@ -33,7 +33,7 @@ def render_user_message(text: str):
                     padding-bottom: 12px;
                     padding-top: 2px;
                 ">
-                    <div style="font-weight: 600;">🧑 Usuario</div>
+                    <div style="font-weight: 600;">🧑 User</div>
                     <div>{text}</div>
                 </div>
                 """,
@@ -48,27 +48,27 @@ def render_screening_result(result: dict):
     col_left, col_right = st.columns([4, 1])
     with col_left:
         with st.container(border=True):
-            st.markdown("🤖 **Asistente**")
+            st.markdown("🤖 **Assistant**")
 
             if not metrics:
-                st.warning("No se han devuelto métricas.")
+                st.warning("No metrics were returned.")
                 return
 
             if explanation:
                 st.markdown(explanation)
 
-            with st.expander("🔧 Detalle técnico"):
+            with st.expander("🔧 Technical details"):
                 st.json(metrics)
 
             if meta:
-                with st.expander("📎 Metadatos"):
+                with st.expander("📎 Metadata"):
                     st.json(meta)
 
 def render_assistant_text(answer: str):
     col_left, col_right = st.columns([4, 1])
     with col_left:
         with st.container(border=True):
-            st.markdown("🤖 **Asistente**")
+            st.markdown("🤖 **Assistant**")
             st.markdown(answer)
 
 def render_assistant_message(content):
@@ -80,19 +80,19 @@ def render_assistant_message(content):
         col_left, _ = st.columns([5, 2])
         with col_left:
             with st.container(border=True):
-                st.markdown("🤖 **Asistente**")
-                st.error(content.get("error", "Error desconocido"))
+                st.markdown("🤖 **Assistant**")
+                st.error(content.get("error", "Unknown error"))
                 st.json(content)
         return
 
-    # SOLO screening si hay métricas reales
+    # SCREENING only if real metrics are present
     if (
         isinstance(content.get("metrics"), dict)
         and content["metrics"]
     ):
         render_screening_result(content)
 
-    # RAG textual
+    # Textual RAG
     elif "answer" in content:
         render_assistant_text(content["answer"])
 
@@ -108,14 +108,14 @@ def run_app():
     # ------------------------------------------------------
     # HEADER
     # ------------------------------------------------------
-    st.title("Screening de Licitaciones – Agentic RAG")
+    st.title("Tender Screening – Agentic RAG")
 
     st.markdown("""
-    Sistema de análisis de licitaciones basado en:
-    - RAG documental
-    - Extracción numérica de ofertas
-    - Cálculo automático de métricas de screening
-    - Arquitectura agentic desacoplada
+    Tender analysis system based on:
+    - Document-based RAG
+    - Numerical extraction of bids
+    - Automatic calculation of screening metrics
+    - Decoupled agentic architecture
     """)
 
     st.divider()
@@ -136,7 +136,7 @@ def run_app():
             collection_name=collection_name
         )
 
-        st.info(f"Colección temporal creada: {collection_name}")
+        st.info(f"Temporary collection created: {collection_name}")
 
     if "agentic" not in st.session_state:
         st.session_state.agentic = initialize_screening_agentic(
@@ -153,16 +153,16 @@ def run_app():
     # ======================================================
     # DOCUMENT INGESTION
     # ======================================================
-    st.header("Subida e indexación de documentación")
+    st.header("Document upload and indexing")
 
     uploaded_files = st.file_uploader(
-        "Sube documentos (PDF, TXT, DOCX):",
+        "Upload documents (PDF, TXT, DOCX):",
         type=["pdf", "txt", "docx"],
         accept_multiple_files=True,
     )
 
-    if uploaded_files and st.button("Procesar e indexar"):
-        with st.spinner("Procesando documentos..."):
+    if uploaded_files and st.button("Process and index"):
+        with st.spinner("Processing documents..."):
             for file in uploaded_files:
                 temp_path = f"temp_{file.name}"
                 with open(temp_path, "wb") as f:
@@ -174,19 +174,19 @@ def run_app():
 
                 os.remove(temp_path)
 
-        st.success("Documentación indexada correctamente.")
+        st.success("Documentation indexed successfully.")
 
     # ======================================================
     # QUERY INPUT
     # ======================================================
-    st.header("Consulta")
+    st.header("Query")
 
     query = st.text_input(
-        "Introduce una consulta (ej: Calcula CV, RD y KSTEST para esta licitación)"
+        "Enter a query (e.g.: Calculate CV, RD and KSTEST for this tender)"
     )
 
-    if st.button("Ejecutar") and query.strip():
-        with st.spinner("El agente está analizando la licitación..."):
+    if st.button("Run") and query.strip():
+        with st.spinner("The agent is analyzing the tender..."):
             result = st.session_state.planner.run(query)
 
         st.session_state.chat_history.append({
@@ -205,7 +205,7 @@ def run_app():
     # ======================================================
     # CHAT FLOW
     # ======================================================
-    st.header("Conversación")
+    st.header("Conversation")
 
     for msg in st.session_state.chat_history:
         if msg["role"] == "user":

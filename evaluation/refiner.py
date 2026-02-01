@@ -82,21 +82,21 @@ class ResponseRefiner:
         )
 
         user_prompt = f"""
-[QUESTION]
-{question}
+        [QUESTION]
+        {question}
 
-[ORIGINAL ANSWER]
-{answer}
+        [ORIGINAL ANSWER]
+        {answer}
 
-[JUDGE FEEDBACK]
-{feedback}
+        [JUDGE FEEDBACK]
+        {feedback}
 
-Task:
-- Improve wording and clarity ONLY if possible without changing meaning.
-- Do not add, remove, or infer information.
-- Return ONLY the refined answer text.
-- If no safe improvement is possible, return the original answer verbatim.
-"""
+        Task:
+        - Improve wording and clarity ONLY if possible without changing meaning.
+        - Do not add, remove, or infer information.
+        - Return ONLY the refined answer text.
+        - If no safe improvement is possible, return the original answer verbatim.
+        """
 
         try:
             start = time.time()

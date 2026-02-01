@@ -57,7 +57,7 @@ class ToolManager:
 
         if name not in self.tools:
             if self.debug:
-                print(f"[TOOL MANAGER] ❌ Herramienta desconocida: {name}")
+                print(f"[TOOL MANAGER] Herramienta desconocida: {name}")
             return {
                 "ok": False,
                 "error_type": "unknown_tool",
@@ -75,7 +75,7 @@ class ToolManager:
         ]
         if missing:
             if self.debug:
-                print(f"[TOOL MANAGER] ❌ Argumentos faltantes: {missing}")
+                print(f"[TOOL MANAGER] Argumentos faltantes: {missing}")
             return {
                 "ok": False,
                 "error_type": "invalid_arguments",
@@ -103,7 +103,7 @@ class ToolManager:
         except Exception as e:
             # ERROR DURO → propagación clara
             if self.debug:
-                print(f"[TOOL MANAGER] ❌ Excepción en tool '{name}': {repr(e)}")
+                print(f"[TOOL MANAGER] Excepción en tool '{name}': {repr(e)}")
 
             return {
                 "ok": False,

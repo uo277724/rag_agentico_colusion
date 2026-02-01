@@ -72,31 +72,31 @@ RULES:
                 {
                     "role": "system",
                     "content": """
-You explain why a numerical screening indicator
-cannot be computed.
+                    You explain why a numerical screening indicator
+                    cannot be computed.
 
-RULES:
-- Do NOT compute anything.
-- Do NOT explain formulas.
-- Do NOT invent data.
-- Base the explanation ONLY on the provided facts.
-- Use clear, professional, neutral language.
-"""
+                    RULES:
+                    - Do NOT compute anything.
+                    - Do NOT explain formulas.
+                    - Do NOT invent data.
+                    - Base the explanation ONLY on the provided facts.
+                    - Use clear, professional, neutral language.
+                    """
                 },
                 {
                     "role": "user",
                     "content": f"""
-User question:
-\"\"\"{query}\"\"\" 
+                    User question:
+                    \"\"\"{query}\"\"\" 
 
-Reason why calculation is not possible:
-{reason}
+                    Reason why calculation is not possible:
+                    {reason}
 
-Details:
-{json.dumps(details, indent=2)}
+                    Details:
+                    {json.dumps(details, indent=2)}
 
-Explain this to the user in a clear way.
-"""
+                    Explain this to the user in a clear way.
+                    """
                 }
             ],
             max_tokens=200

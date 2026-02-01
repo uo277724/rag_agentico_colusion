@@ -17,57 +17,57 @@ def evaluate_with_criteria(
     client = OpenAI()
 
     prompt = f"""
-You are a STRICT EVALUATION JUDGE for a documentation-based analytical RAG system.
+    You are a STRICT EVALUATION JUDGE for a documentation-based analytical RAG system.
 
-CRITICAL EVALUATION RULES:
-- Do NOT reward creativity, insight, or interpretation.
-- Penalize any inference not explicitly supported by the context.
-- Penalize any number, claim, or conclusion not present in the context.
-- If the answer extrapolates beyond the context, mark it as an error.
+    CRITICAL EVALUATION RULES:
+    - Do NOT reward creativity, insight, or interpretation.
+    - Penalize any inference not explicitly supported by the context.
+    - Penalize any number, claim, or conclusion not present in the context.
+    - If the answer extrapolates beyond the context, mark it as an error.
 
-Evaluate the answer using the following criteria (0–4):
+    Evaluate the answer using the following criteria (0–4):
 
-1. CLARITY
-- Is the answer clear, precise, and well structured?
+    1. CLARITY
+    - Is the answer clear, precise, and well structured?
 
-2. RELEVANCE
-- Does the answer directly address the question?
+    2. RELEVANCE
+    - Does the answer directly address the question?
 
-3. FAITHFULNESS
-- Is the answer strictly grounded in the provided context?
-- Are all claims and numbers present in the context?
+    3. FAITHFULNESS
+    - Is the answer strictly grounded in the provided context?
+    - Are all claims and numbers present in the context?
 
-4. TRACEABILITY
-- Is it clear how the answer relates to the context?
-- Could a reviewer trace statements back to the context?
+    4. TRACEABILITY
+    - Is it clear how the answer relates to the context?
+    - Could a reviewer trace statements back to the context?
 
-Additionally, identify ISSUE TYPES if present:
-- "textual_issue"
-- "missing_evidence"
-- "unsupported_inference"
-- "analysis_error"
-- "wrong_calculation"
+    Additionally, identify ISSUE TYPES if present:
+    - "textual_issue"
+    - "missing_evidence"
+    - "unsupported_inference"
+    - "analysis_error"
+    - "wrong_calculation"
 
-Return ONLY a valid JSON object with EXACTLY this structure:
-{{
-  "Clarity": <int>,
-  "Relevance": <int>,
-  "Faithfulness": <int>,
-  "Traceability": <int>,
-  "Overall_score": <float>,
-  "Issue_types": [<string>, ...],
-  "Feedback": "<brief explanation>"
-}}
+    Return ONLY a valid JSON object with EXACTLY this structure:
+    {{
+    "Clarity": <int>,
+    "Relevance": <int>,
+    "Faithfulness": <int>,
+    "Traceability": <int>,
+    "Overall_score": <float>,
+    "Issue_types": [<string>, ...],
+    "Feedback": "<brief explanation>"
+    }}
 
-QUESTION:
-{question}
+    QUESTION:
+    {question}
 
-CONTEXT (excerpt):
-{context[:1000]}
+    CONTEXT (excerpt):
+    {context[:1000]}
 
-ANSWER:
-{answer}
-"""
+    ANSWER:
+    {answer}
+    """
 
     try:
         response = client.chat.completions.create(
