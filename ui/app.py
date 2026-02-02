@@ -1,5 +1,6 @@
 import os
 import time
+import uuid
 import streamlit as st
 
 # ==========================================================
@@ -126,6 +127,9 @@ def run_app():
     if "embedder" not in st.session_state:
         st.session_state.embedder = Embedder("intfloat/e5-large-v2")
 
+    if "conversation_id" not in st.session_state:
+        st.session_state.conversation_id = str(uuid.uuid4())
+
     if "vectorstore" not in st.session_state:
         os.makedirs("data/chroma", exist_ok=True)
         session_id = str(int(time.time()))
@@ -187,7 +191,10 @@ def run_app():
 
     if st.button("Run") and query.strip():
         with st.spinner("The agent is analyzing the tender..."):
-            result = st.session_state.planner.run(query)
+            result = st.session_state.planner.run(
+                query=query,
+                conversation_id=st.session_state.conversation_id
+            )
 
         st.session_state.chat_history.append({
             "role": "user",

@@ -5,7 +5,8 @@ from typing import Dict, Any, List
 from openai import OpenAI
 
 from agents.consolidation.bid_consolidator import BidConsolidationAgent
-
+from memory.memory_store import MemoryStore
+from agents.memory_resolver import MemoryResolverAgent
 
 SCREENING_METRICS = {
     "cv": {"min_n": 2},
@@ -25,11 +26,13 @@ class ScreeningPlannerAgent:
     - Screening numérico de licitaciones
     """
 
-    def __init__(self, tool_manager, calculation_agents: Dict[str, Any]):
+    def __init__(self, tool_manager, calculation_agents: Dict[str, Any], memory_store: MemoryStore):
         self.client = OpenAI()
         self.tool_manager = tool_manager
         self.calculation_agents = calculation_agents
         self.consolidator = BidConsolidationAgent()
+        self.memory_store = memory_store
+        self.memory_resolver = MemoryResolverAgent()
 
     # --------------------------------------------------
     # Prompt de detección (clasificación pura)
@@ -103,13 +106,87 @@ class ScreeningPlannerAgent:
         )
 
         return completion.choices[0].message.content.strip()
+    
+    def _reinterpret_query_with_memory(
+        self,
+        query: str,
+        memory: Dict[str, Any],
+    ) -> str:
+        """
+        Rewrites the user query to make it fully self-contained
+        using conversation memory, without adding new facts.
+        """
+
+        completion = self.client.chat.completions.create(
+            model="gpt-4o-mini",
+            temperature=0.0,
+            max_tokens=120,
+            messages=[
+                {
+                    "role": "system",
+                    "content": """
+                You rewrite user follow-up questions to make them fully explicit and
+                document-anchored.
+
+                CRITICAL RULES:
+                - You MUST preserve the original documentary subject (meeting, act, table, document).
+                - You MUST preserve roles or entities already implied (e.g. president, members, attendees, vocales).
+                - You MUST NOT generalize the question.
+                - You MUST NOT remove references to the document or event if present in memory.
+                - You MUST NOT simplify the question into a generic one.
+                - Use ONLY the provided memory facts.
+                - Do NOT add new information.
+                - Do NOT answer the question.
+                - Do NOT explain anything.
+
+                GOAL:
+                Rewrite the question so that it clearly refers to the same document,
+                event, and section as the previous turn, making implicit references explicit.
+
+                Return ONLY the rewritten question.
+                """
+                },
+                {
+                    "role": "user",
+                    "content": f"""
+                    Current question:
+                    {query}
+
+                    Conversation memory:
+                    {json.dumps(memory, indent=2)}
+                    """
+                }
+            ]
+        )
+
+        return completion.choices[0].message.content.strip()
 
     # --------------------------------------------------
     # Run
     # --------------------------------------------------
-    def run(self, query: str) -> Dict[str, Any]:
+    def run(self, query: str, conversation_id: str) -> Dict[str, Any]:
         print("\n[PLANNER] ======================")
+
+        memory = self.memory_store.get_state(conversation_id)
+        print("[PLANNER] Memory snapshot:", memory)
+
         print("[PLANNER] Query:", query)
+
+        # ----------------------------------------------
+        # MEMORY DEPENDENCY CHECK
+        # ----------------------------------------------
+        resolution = self.memory_resolver.needs_memory(query)
+
+        print("[PLANNER] Memory resolution:", resolution)
+
+        effective_query = query
+
+        if resolution.get("needs_memory") and memory:
+            effective_query = self._reinterpret_query_with_memory(
+                query=query,
+                memory=memory
+            )
+            print("[PLANNER] Rewritten query:", effective_query)
 
         # ----------------------------------------------
         # STEP 1: INTENT + METRIC DETECTION
@@ -123,7 +200,7 @@ class ScreeningPlannerAgent:
                     "role": "user",
                     "content": f"""
                     User query:
-                    \"\"\"{query}\"\"\" 
+                    \"\"\"{effective_query}\"\"\" 
 
                     Return format:
                     {{
@@ -160,7 +237,10 @@ class ScreeningPlannerAgent:
         # STEP 2: DOCUMENTAL RAG
         # ----------------------------------------------
         if intent == "rag":
-            rag = self.tool_manager.execute("rag_query", {"query": query})
+            rag = self.tool_manager.execute(
+                "rag_query",
+                {"query": effective_query}
+            )
 
             if not rag.get("ok"):
                 return {
@@ -170,6 +250,17 @@ class ScreeningPlannerAgent:
                 }
 
             result = rag.get("result", {})
+
+            self.memory_store.update_state(
+                conversation_id,
+                {
+                    "last_mode": "rag",
+                    "last_question": query,
+                    "last_answer": result.get("answer"),
+                    "last_sources": result.get("sources", []),
+                }
+            )
+
             return {
                 "ok": True,
                 "mode": "rag",
@@ -209,7 +300,7 @@ class ScreeningPlannerAgent:
         # ----------------------------------------------
         extraction = self.tool_manager.execute(
             "rag_extract_bids",
-            {"query": query}
+            {"query": effective_query}
         )
 
         if not extraction.get("ok"):
@@ -360,6 +451,19 @@ class ScreeningPlannerAgent:
     )
 
         explanation = explanation_completion.choices[0].message.content.strip()
+
+        self.memory_store.update_state(
+            conversation_id,
+            {
+                "last_mode": "screening",
+                "last_metrics": list(results.keys()),
+                "n_bids": len(final_bids),
+                "currency": result.get("currency"),
+                "confidence": result.get("confidence"),
+                "last_decisions": decisions,
+                "data_sources": source_refs,
+            }
+        )
 
         # ----------------------------------------------
         # STEP 9: FINAL RESPONSE (UNCHANGED)

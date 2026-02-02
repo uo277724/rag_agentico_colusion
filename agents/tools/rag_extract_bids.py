@@ -35,6 +35,7 @@ class RAGExtractBidsTool:
             embedder=self.embedder,
             vectorstore=self.vectorstore,
             lazy_typer=self.lazy_typer,
+            enable_lazy_typing=False,
         )
 
         raw_results = retriever.retrieve(query)

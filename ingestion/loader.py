@@ -3,6 +3,7 @@ import fitz  # PyMuPDF
 import docx
 from ingestion.img_processor import ImageProcessor
 from dotenv import load_dotenv
+from typing import List, Dict
 
 load_dotenv()
 
@@ -13,9 +14,9 @@ OVERLAP_CHARS = 200
 
 
 # --------------------------------------------------
-# 1. Lectura layout-aware
+# 1. Lectura layout-aware REAL
 # --------------------------------------------------
-def _load_pdf_blocks(file_path: str):
+def _load_pdf_blocks(file_path: str) -> List[Dict]:
     blocks = []
     with fitz.open(file_path) as doc:
         for page_index, page in enumerate(doc):
@@ -30,22 +31,68 @@ def _load_pdf_blocks(file_path: str):
                         "y1": y1,
                         "text": text
                     })
-
-    return sorted(blocks, key=lambda b: (b["page"], b["y0"], b["x0"]))
-
-
-def _load_txt(file_path: str) -> str:
-    with open(file_path, "r", encoding="utf-8", errors="ignore") as f:
-        return f.read()
-
-
-def _load_docx(file_path: str) -> str:
-    doc = docx.Document(file_path)
-    return "\n".join(p.text for p in doc.paragraphs if p.text.strip())
+    return blocks
 
 
 # --------------------------------------------------
-# 2. Chunking estructural con solapamiento
+# 2. Detección geométrica de columnas
+# --------------------------------------------------
+def _split_columns(blocks: List[Dict]) -> List[List[Dict]]:
+    xs = sorted(b["x0"] for b in blocks)
+    if not xs:
+        return [blocks]
+
+    min_x, max_x = xs[0], xs[-1]
+    width = max_x - min_x
+
+    # Documento de una sola columna
+    if width < 200:
+        return [blocks]
+
+    mid_x = min_x + width / 2
+
+    left = []
+    right = []
+
+    for b in blocks:
+        if b["x0"] < mid_x:
+            left.append(b)
+        else:
+            right.append(b)
+
+    return [left, right]
+
+
+# --------------------------------------------------
+# 3. Agrupación de bloques cercanos (listas)
+# --------------------------------------------------
+def _merge_close_blocks(blocks: List[Dict], y_gap=25, x_tolerance=20) -> List[str]:
+    if not blocks:
+        return []
+
+    blocks = sorted(blocks, key=lambda b: b["y0"])
+    merged = []
+    current = blocks[0]["text"]
+    prev = blocks[0]
+
+    for b in blocks[1:]:
+        same_column = abs(b["x0"] - prev["x0"]) < x_tolerance
+        close_vertically = abs(b["y0"] - prev["y1"]) < y_gap
+
+        if same_column and close_vertically:
+            current += "\n" + b["text"]
+        else:
+            merged.append(current)
+            current = b["text"]
+
+        prev = b
+
+    merged.append(current)
+    return merged
+
+
+# --------------------------------------------------
+# 4. Chunking con solapamiento (al final)
 # --------------------------------------------------
 def _chunk_with_overlap(text: str, max_chars: int, overlap_chars: int):
     chunks = []
@@ -62,15 +109,13 @@ def _chunk_with_overlap(text: str, max_chars: int, overlap_chars: int):
         if end == length:
             break
 
-        cursor = end - overlap_chars
-        if cursor < 0:
-            cursor = 0
+        cursor = max(0, end - overlap_chars)
 
     return chunks
 
 
 # --------------------------------------------------
-# 3. Pipeline principal
+# 5. Pipeline principal
 # --------------------------------------------------
 def process_file(file_path: str):
     ext = os.path.splitext(file_path)[1].lower()
@@ -83,10 +128,19 @@ def process_file(file_path: str):
 
         pages = {}
         for b in blocks:
-            pages.setdefault(b["page"], []).append(b["text"])
+            pages.setdefault(b["page"], []).append(b)
 
-        for page, texts in pages.items():
-            page_text = "\n".join(texts)
+        for page, page_blocks in pages.items():
+            columns = _split_columns(page_blocks)
+
+            ordered_text_blocks = []
+            for col in columns:
+                col_blocks = sorted(col, key=lambda b: b["y0"])
+                merged = _merge_close_blocks(col_blocks)
+                ordered_text_blocks.extend(merged)
+
+            page_text = "\n\n".join(ordered_text_blocks)
+
             chunks = _chunk_with_overlap(
                 page_text,
                 max_chars=MAX_CHARS,
@@ -105,24 +159,19 @@ def process_file(file_path: str):
         img_processor = ImageProcessor()
         images = img_processor.process_pdf_images(file_path)
 
-        image_chunks = [{
-            "type": "figure",
-            "source": base_name,
-            "page": img["page"],
-            "content": img["description"]
-        } for img in images]
-
-        all_chunks.extend(image_chunks)
+        for img in images:
+            all_chunks.append({
+                "type": "figure",
+                "source": base_name,
+                "page": img["page"],
+                "content": img["description"]
+            })
 
     elif ext == ".txt":
-        raw = _load_txt(file_path)
-        chunks = _chunk_with_overlap(
-            raw,
-            max_chars=MAX_CHARS,
-            overlap_chars=OVERLAP_CHARS
-        )
+        with open(file_path, "r", encoding="utf-8", errors="ignore") as f:
+            raw = f.read()
 
-        for c in chunks:
+        for c in _chunk_with_overlap(raw, MAX_CHARS, OVERLAP_CHARS):
             all_chunks.append({
                 "type": "otro",
                 "source": base_name,
@@ -130,14 +179,10 @@ def process_file(file_path: str):
             })
 
     elif ext == ".docx":
-        raw = _load_docx(file_path)
-        chunks = _chunk_with_overlap(
-            raw,
-            max_chars=MAX_CHARS,
-            overlap_chars=OVERLAP_CHARS
-        )
+        doc = docx.Document(file_path)
+        raw = "\n".join(p.text for p in doc.paragraphs if p.text.strip())
 
-        for c in chunks:
+        for c in _chunk_with_overlap(raw, MAX_CHARS, OVERLAP_CHARS):
             all_chunks.append({
                 "type": "otro",
                 "source": base_name,

@@ -1,6 +1,7 @@
 # generation/generator.py
 
 import os
+from typing import Optional, List
 from openai import OpenAI
 
 
@@ -19,23 +20,33 @@ class Generator:
         self.model = model_name
         self.temperature = temperature
 
-    def generate(self, query: str, context: str, sources: list):
+    def generate(
+        self,
+        query: str,
+        context: str,
+        sources: List[str],
+        memory_context: Optional[str] = None,
+    ):
         """
         Genera una respuesta fundamentada en el contexto proporcionado.
-        No inventa información fuera de los fragmentos.
-        Puede trabajar con descripciones textuales y visuales.
+        La memoria conversacional se usa SOLO para coherencia, nunca como fuente factual.
         """
 
         print("\n[GENERATOR] ======================")
         print(f"[GENERATOR] Modelo: {self.model}")
         print(f"[GENERATOR] Pregunta: {query}")
         print(f"[GENERATOR] Nº de fuentes: {len(sources)} -> {sources}")
+
+        if memory_context:
+            print("[GENERATOR] Memory context recibido:")
+            print(memory_context)
+
         print("[GENERATOR] Fragmento de contexto (vista previa 1000 caracteres):")
         print(context[:1000])
         print("[GENERATOR] ======================\n")
 
         # =====================================================
-        # 1. Estructurar contexto
+        # 1. Estructurar contexto documental (IGUAL QUE ANTES)
         # =====================================================
         structured_context = "\n\n".join(
             [
@@ -48,10 +59,24 @@ class Generator:
 
         max_context_chars = 18000
         if len(structured_context) > max_context_chars:
-            structured_context = structured_context[:max_context_chars] + "\n[Contexto truncado por longitud]"
+            structured_context = (
+                structured_context[:max_context_chars]
+                + "\n[Contexto truncado por longitud]"
+            )
 
         # =====================================================
-        # 2. Prompt del sistema y del usuario
+        # 2. Bloque de memoria (NUEVO, AISLADO)
+        # =====================================================
+        memory_block = ""
+        if memory_context:
+            memory_block = (
+                "\n\nContexto de la conversación previa "
+                "(solo para coherencia y repreguntas, NO como fuente factual):\n"
+                f"{memory_context}\n"
+            )
+
+        # =====================================================
+        # 3. Prompt del sistema (MISMO + REGLAS DE MEMORIA)
         # =====================================================
         system_prompt = (
             "Eres un asistente experto en análisis y comprensión documental. "
@@ -59,18 +84,29 @@ class Generator:
             "Cuando proporciones una respuesta, DEBES indicar explícitamente: "
             "- el documento de origen, "
             "- el número de página (si aparece en el fragmento), "
-            "- y el tipo de sección o tabla si se menciona. "
-            "No inventes referencias ni páginas. "
-            "Tu tarea es responder preguntas basándote únicamente en los fragmentos proporcionados. "
-            "Los fragmentos pueden contener texto descriptivo, información técnica o descripciones de elementos visuales. "
-            "Analiza su contenido globalmente, identifica las partes relevantes y genera una respuesta clara y fundamentada. "
-            "No inventes información ni hagas suposiciones fuera de lo que está explícitamente en el contexto. "
-            "Si no hay suficiente información, responde exactamente: "
-            "'No tengo información suficiente en los documentos proporcionados.'\n\n"
+            "- y el tipo de sección o tabla si se menciona.\n\n"
+
+            "REGLAS CRÍTICAS:\n"
+            "- Usa EXCLUSIVAMENTE los fragmentos documentales como fuente factual.\n"
+            "- La memoria conversacional es SOLO para coherencia lingüística y referencia implícita.\n"
+            "- NO derives hechos ni datos nuevos a partir de la memoria.\n"
+            "- NO inventes referencias, páginas ni cargos.\n\n"
+
+            "CUANDO LA INFORMACIÓN NO SEA SUFICIENTE:\n"
+            "- NO inventes una respuesta.\n"
+            "- Explica claramente QUÉ información concreta no aparece en los documentos.\n"
+            "- Indica brevemente QUÉ información relacionada SÍ está presente, si la hay.\n"
+            "- Sugiere UNA forma concreta de reformular o concretar la pregunta para poder responder.\n"
+            "- No finalices la respuesta con una negativa genérica.\n\n"
+
+            f"{memory_block}\n"
             "Fragmentos relevantes:\n"
             f"{structured_context}"
         )
 
+        # =====================================================
+        # 4. Prompt del usuario (IGUAL)
+        # =====================================================
         user_prompt = (
             f"Pregunta del usuario: {query}\n\n"
             "Redacta una respuesta precisa, clara y basada exclusivamente en los fragmentos anteriores. "
@@ -82,7 +118,7 @@ class Generator:
         )
 
         # =====================================================
-        # 3. Llamada al modelo
+        # 5. Llamada al modelo
         # =====================================================
         response = self.client.chat.completions.create(
             model=self.model,
@@ -97,7 +133,7 @@ class Generator:
         answer = response.choices[0].message.content.strip()
 
         # =====================================================
-        # 4. Postprocesamiento y retorno (sin repetir fuentes)
+        # 6. Postprocesamiento (IGUAL)
         # =====================================================
         clean_sources = sorted(set([s for s in sources if s.strip()]))
         answer_final = answer.strip()
@@ -107,4 +143,7 @@ class Generator:
         print(f"[GENERATOR] Fuentes: {clean_sources}")
         print("[GENERATOR] ----------------------\n")
 
-        return {"answer": answer_final, "sources": clean_sources}
+        return {
+            "answer": answer_final,
+            "sources": clean_sources,
+        }

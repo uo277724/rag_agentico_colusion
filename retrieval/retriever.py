@@ -25,6 +25,7 @@ class Retriever:
         top_k_secondary: int = 20,
         min_confidence: float = 0.0,
         lazy_typer: Optional[Any] = None,
+        enable_lazy_typing: bool = True
     ):
         self.embedder = embedder
         self.vectorstore = vectorstore
@@ -32,6 +33,7 @@ class Retriever:
         self.top_k_secondary = top_k_secondary
         self.min_confidence = min_confidence
         self.lazy_typer = lazy_typer
+        self.enable_lazy_typing = enable_lazy_typing
 
     # --------------------------------------------------
     # Embedding de consulta
@@ -59,8 +61,8 @@ class Retriever:
             top_k=top_k,
         )
 
-        print("[RETRIEVER] Raw vectorstore.query result type:", type(result))
-        print("[RETRIEVER] Raw vectorstore.query result value:", result)
+        # print("[RETRIEVER] Raw vectorstore.query result type:", type(result))
+        # print("[RETRIEVER] Raw vectorstore.query result value:", result)
 
         return result
 
@@ -92,8 +94,7 @@ class Retriever:
         # --------------------------------------------------
         # Tipado semántico perezoso (ENRIQUECIMIENTO)
         # --------------------------------------------------
-        if self.lazy_typer and documents:
-            print("[RETRIEVER] Applying lazy semantic typing...")
+        if self.enable_lazy_typing and self.lazy_typer and documents:
             try:
                 documents = self.lazy_typer.annotate(documents)
             except Exception as e:

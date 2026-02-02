@@ -63,7 +63,7 @@ class LazySemanticTyper:
             raw_output = response.choices[0].message.content.strip()
 
             if self.debug:
-                print("[LAZY_TYPER] Raw model output:")
+                # print("[LAZY_TYPER] Raw model output:")
                 print(raw_output)
 
             clean = self._strip_markdown_fences(raw_output)

@@ -21,6 +21,9 @@ from agents.planner import ScreeningPlannerAgent
 # Lazy Semantic Typer
 from retrieval.lazy_semantic_typer import LazySemanticTyper
 
+# Memory Store
+from memory.memory_store import MemoryStore
+
 # Inicialización del Lazy Semantic Typer
 lazy_typer = LazySemanticTyper(
     model="gpt-4o-mini",
@@ -81,20 +84,27 @@ def initialize_screening_agentic(embedder, vectorstore):
     }
 
     # ---------------------------
+    # MEMORY STORE (PERSISTENTE)
+    # ---------------------------
+    memory_store = MemoryStore()
+
+    # ---------------------------
     # PLANNER (ORQUESTADOR)
     # ---------------------------
     planner = ScreeningPlannerAgent(
         tool_manager=tool_manager,
-        calculation_agents=calculation_agents
+        calculation_agents=calculation_agents,
+        memory_store=memory_store,
     )
 
     # ---------------------------
     # EXPORTAR SISTEMA
     # ---------------------------
     return {
-        "planner": planner,
-        "tool_manager": tool_manager,
-        "calculation_agents": calculation_agents,
-        "rag_tools": rag_tools,
-        "system_profile": system_profile,
-    }
+    "planner": planner,
+    "tool_manager": tool_manager,
+    "calculation_agents": calculation_agents,
+    "rag_tools": rag_tools,
+    "system_profile": system_profile,
+    "memory": memory_store,
+}

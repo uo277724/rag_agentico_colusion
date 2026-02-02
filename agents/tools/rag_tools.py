@@ -8,6 +8,7 @@ from evaluation.refiner import ResponseRefiner
 from evaluation.utils_logging import log_evaluation
 
 import time
+from typing import Dict, Any
 
 
 class RAGQueryTool:
@@ -36,7 +37,9 @@ class RAGQueryTool:
         self.final_k = final_k
         self.lazy_typer = lazy_typer
 
-    def __call__(self, query: str):
+    def __call__(self, query: str, memory_context: Dict[str, Any] | None = None,):
+
+        memory_context = memory_context or {}
 
         print("\n[RAG] ===============================")
         print("[RAG] Query recibida:", query)
@@ -48,6 +51,7 @@ class RAGQueryTool:
             embedder=self.embedder,
             vectorstore=self.vectorstore,
             lazy_typer=self.lazy_typer,
+            enable_lazy_typing=False,
         )
 
         docs = retriever.retrieve(query)
@@ -169,6 +173,7 @@ class RAGQueryTool:
             query=query,
             context=ranked_context,
             sources=sources,
+            memory_context=memory_context,
         )
 
         end_time = time.time()
