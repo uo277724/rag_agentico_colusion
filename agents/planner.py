@@ -5,6 +5,7 @@ from typing import Dict, Any, List
 from openai import OpenAI
 
 from agents.consolidation.bid_consolidator import BidConsolidationAgent
+from agents.interpretation.screening_assessment import ScreeningAssessmentAgent
 from memory.memory_store import MemoryStore
 from agents.memory_resolver import MemoryResolverAgent
 
@@ -33,6 +34,7 @@ class ScreeningPlannerAgent:
         self.consolidator = BidConsolidationAgent()
         self.memory_store = memory_store
         self.memory_resolver = MemoryResolverAgent()
+        self.interpretation_agent = ScreeningAssessmentAgent()
 
     # --------------------------------------------------
     # Prompt de detección (clasificación pura)
@@ -44,17 +46,24 @@ class ScreeningPlannerAgent:
         TASK:
         1. Determine whether the user requests:
         - DOCUMENTATION-ONLY information
-        - NUMERICAL SCREENING of bids
+        - NUMERICAL SCREENING of bids (explicit indicators requested)
+        - GLOBAL SCREENING ASSESSMENT (general evaluation of possible collusion indicators)
 
         2. If screening is requested, map to SUPPORTED METRICS ONLY.
 
         SUPPORTED METRICS:
         - cv, spd, diffp, rd, kurt, skew, kstest
 
+        A request is a GLOBAL SCREENING ASSESSMENT if:
+        - The user asks whether there are indications, signs, risks or patterns of collusion
+        - The user does NOT request specific indicators or formulas
+        - The question is evaluative or interpretative rather than computational
+
         RULES:
         - Return ONLY a JSON object.
         - Do NOT invent metrics.
         - Do NOT compute anything.
+        - For GLOBAL SCREENING ASSESSMENT, metrics MAY be empty.
         - If screening intent exists but no supported metrics apply,
         return intent="screening" and metrics=[].
         """
@@ -160,6 +169,59 @@ class ScreeningPlannerAgent:
         )
 
         return completion.choices[0].message.content.strip()
+    
+    # --------------------------------------------------
+    # Helper: render structured assessment into text
+    def _render_assessment_text(
+        self,
+        interpretation: Dict[str, Any],
+        metrics: Dict[str, Any],
+    ) -> str:
+        lines = []
+
+        # ----------------------------------
+        # Assessment level
+        # ----------------------------------
+        level = interpretation.get("assessment_level", "inconclusive")
+        lines.append(f"**Assessment level:** {level}\n")
+
+        # ----------------------------------
+        # Summary
+        # ----------------------------------
+        summary = interpretation.get("summary")
+        if summary:
+            lines.append(summary + "\n")
+
+        # ----------------------------------
+        # Metric observations (WITH VALUES)
+        # ----------------------------------
+        obs = interpretation.get("metric_observations", {})
+        if obs:
+            lines.append("**Indicator observations:**\n")
+            for metric, text in obs.items():
+                value = metrics.get(metric, {}).get("value")
+                if value is not None:
+                    lines.append(f"- **{metric}** (value = {value:.4f}): {text}")
+                else:
+                    lines.append(f"- **{metric}**: {text}")
+
+        # ----------------------------------
+        # Limitations
+        # ----------------------------------
+        limitations = interpretation.get("limitations", [])
+        if limitations:
+            lines.append("\n**Limitations:**")
+            for l in limitations:
+                lines.append(f"- {l}")
+
+        # ----------------------------------
+        # Disclaimer
+        # ----------------------------------
+        disclaimer = interpretation.get("disclaimer")
+        if disclaimer:
+            lines.append("\n*" + disclaimer + "*")
+
+        return "\n".join(lines)
 
     # --------------------------------------------------
     # Run
@@ -204,7 +266,7 @@ class ScreeningPlannerAgent:
 
                     Return format:
                     {{
-                    "intent": "rag" | "screening",
+                    "intent": "rag" | "screening" | "screening_assessment",
                     "metrics": ["cv", "rd", ...]
                     }}
                     """
@@ -230,7 +292,7 @@ class ScreeningPlannerAgent:
         print("[PLANNER] Parsed intent:", intent)
         print("[PLANNER] Parsed metrics:", requested_metrics)
 
-        if intent not in ("rag", "screening"):
+        if intent not in ("rag", "screening", "screening_assessment"):
             intent = "rag"
 
         # ----------------------------------------------
@@ -269,13 +331,18 @@ class ScreeningPlannerAgent:
                 "evaluation": result.get("evaluation"),
                 "metrics": result.get("metrics"),
             }
+        
+        # ----------------------------------------------
+        # STEP 2bis: GLOBAL SCREENING ASSESSMENT
+        if intent == "screening_assessment":
+            requested_metrics = list(SCREENING_METRICS.keys())
 
         # ----------------------------------------------
         # STEP 3: SCREENING VALIDATION
         # ----------------------------------------------
         print("[PLANNER] Entering SCREENING mode")
 
-        if not requested_metrics:
+        if intent == "screening" and not requested_metrics:
             explanation = self._generate_unfeasible_explanation(
                 query=query,
                 reason="No screening metrics were identified in the request.",
@@ -377,6 +444,55 @@ class ScreeningPlannerAgent:
         for metric in requested_metrics:
             agent = self.calculation_agents.get(metric)
             results[metric] = agent.compute(final_bids)
+
+        print("[PLANNER] Computed screening metrics:")
+        for k, v in results.items():
+            print(f"  - {k}: {v}")
+
+        print("[PLANNER] Computed metrics:", results)
+
+        # ----------------------------------------------
+        # STEP 8bis: INTERPRETATIVE ASSESSMENT
+        # ----------------------------------------------
+        if intent == "screening_assessment":
+            interpretation = self.interpretation_agent.assess(
+                metrics=results,
+                context={
+                    "n_bids": len(final_bids),
+                    "confidence": result.get("confidence"),
+                    "currency": result.get("currency"),
+                }
+            )
+
+            print(interpretation)
+
+            self.memory_store.update_state(
+                conversation_id,
+                {
+                    "last_mode": "screening_assessment",
+                    "last_metrics": list(results.keys()),
+                    "n_bids": len(final_bids),
+                    "confidence": result.get("confidence"),
+                }
+            )
+
+            assessment_text = self._render_assessment_text(
+                interpretation=interpretation,
+                metrics=results
+            )
+
+            return {
+                "ok": True,
+                "mode": "screening_assessment",
+                "metrics": results,
+                "explanation": assessment_text,   # ← clave para la UI
+                "assessment": interpretation,
+                "meta": {
+                    "n_bids": len(final_bids),
+                    "currency": result.get("currency"),
+                    "confidence": result.get("confidence"),
+                }
+            }
 
         # ----------------------------------------------
         # STEP 8: QUALITATIVE EXPLANATION (UNCHANGED)

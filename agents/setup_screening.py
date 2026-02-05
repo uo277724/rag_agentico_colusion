@@ -55,6 +55,10 @@ def initialize_screening_agentic(embedder, vectorstore):
             "documentation_query",
             "bid_extraction"
         ],
+        "analytical_capabilities": [
+            "statistical_screening",
+            "global_screening_assessment"
+        ],
     }
 
     # ---------------------------

@@ -86,6 +86,23 @@ def render_assistant_message(content):
                 st.json(content)
         return
 
+    # ALWAYS render textual answer if present
+    if "answer" in content and content["answer"]:
+        render_assistant_text(content["answer"])
+
+    # Then render metrics if they exist
+    if isinstance(content.get("metrics"), dict) and content["metrics"]:
+        render_screening_result(content)
+
+    if not content.get("ok", True):
+        col_left, _ = st.columns([5, 2])
+        with col_left:
+            with st.container(border=True):
+                st.markdown("🤖 **Assistant**")
+                st.error(content.get("error", "Unknown error"))
+                st.json(content)
+        return
+
     # SCREENING only if real metrics are present
     if (
         isinstance(content.get("metrics"), dict)
