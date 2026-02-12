@@ -17,10 +17,11 @@ class RAGExtractBidsTool:
       (NO LLM hallucination).
     """
 
-    def __init__(self, embedder, vectorstore, lazy_typer=None):
+    def __init__(self, embedder, vectorstore, lazy_typer=None, graph_store=None):
         self.embedder = embedder
         self.vectorstore = vectorstore
         self.lazy_typer = lazy_typer
+        self.graph_store = graph_store
         self.client = OpenAI()
 
     def __call__(self, query: str) -> Dict[str, Any]:
@@ -189,6 +190,15 @@ class RAGExtractBidsTool:
 
         print("[RAG_EXTRACT_BIDS] Average confidence:", avg_confidence)
         print("[RAG_EXTRACT_BIDS] ======================\n")
+
+        if self.graph_store:
+            try:
+                self.graph_store.add_bids(
+                    normalized,
+                    default_source_refs=chunk_refs,
+                )
+            except Exception as e:
+                print("[RAG_EXTRACT_BIDS] Graph update failed:", e)
 
         return {
             "bids": normalized,

@@ -4,6 +4,7 @@ from agents.tool_manager import ToolManager
 
 # RAG tools
 from agents.tools.rag_tools import build_rag_tools
+from agents.tools.graph_rag_tools import build_graph_rag_tools
 from agents.tools.rag_extract_bids import RAGExtractBidsTool
 
 # Calculation Agents
@@ -20,6 +21,9 @@ from agents.planner import ScreeningPlannerAgent
 
 # Lazy Semantic Typer
 from retrieval.lazy_semantic_typer import LazySemanticTyper
+
+# Graph store
+from graph.graph_store import GraphStore
 
 # Memory Store
 from memory.memory_store import MemoryStore
@@ -70,8 +74,23 @@ def initialize_screening_agentic(embedder, vectorstore):
     rag_tools = build_rag_tools(embedder, vectorstore, lazy_typer=lazy_typer)
     tool_manager.register("rag_query", rag_tools["rag_query"])
 
+    # GraphRAG
+    graph_store = GraphStore()
+    graph_rag_tools = build_graph_rag_tools(
+        embedder,
+        vectorstore,
+        graph_store,
+        lazy_typer=lazy_typer,
+    )
+    tool_manager.register("graph_rag_query", graph_rag_tools["graph_rag_query"])
+
     # RAG extractivo (bids)
-    rag_extract_bids_tool = RAGExtractBidsTool(embedder, vectorstore , lazy_typer=lazy_typer)
+    rag_extract_bids_tool = RAGExtractBidsTool(
+        embedder,
+        vectorstore,
+        lazy_typer=lazy_typer,
+        graph_store=graph_store,
+    )
     tool_manager.register("rag_extract_bids", rag_extract_bids_tool)
 
     # ---------------------------
@@ -109,6 +128,8 @@ def initialize_screening_agentic(embedder, vectorstore):
     "tool_manager": tool_manager,
     "calculation_agents": calculation_agents,
     "rag_tools": rag_tools,
+    "graph_rag_tools": graph_rag_tools,
+    "graph_store": graph_store,
     "system_profile": system_profile,
     "memory": memory_store,
 }

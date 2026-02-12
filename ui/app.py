@@ -123,6 +123,13 @@ def render_assistant_message(content):
 def run_app():
     st.set_page_config(page_title="Agentic Screening RAG", layout="wide")
 
+    with st.sidebar:
+        st.header("Settings")
+        st.session_state.use_graph_rag = st.checkbox(
+            "GraphRAG mode",
+            value=st.session_state.get("use_graph_rag", False),
+        )
+
     # ------------------------------------------------------
     # HEADER
     # ------------------------------------------------------
@@ -168,6 +175,9 @@ def run_app():
     if "planner" not in st.session_state:
         st.session_state.planner = st.session_state.agentic["planner"]
 
+    if "graph_store" not in st.session_state:
+        st.session_state.graph_store = st.session_state.agentic.get("graph_store")
+
     if "chat_history" not in st.session_state:
         st.session_state.chat_history = []
 
@@ -193,6 +203,9 @@ def run_app():
                 docs = st.session_state.embedder.embed_documents(docs)
                 st.session_state.vectorstore.add_documents(docs)
 
+                if st.session_state.graph_store:
+                    st.session_state.graph_store.add_chunks(docs)
+
                 os.remove(temp_path)
 
         st.success("Documentation indexed successfully.")
@@ -210,7 +223,8 @@ def run_app():
         with st.spinner("The agent is analyzing the tender..."):
             result = st.session_state.planner.run(
                 query=query,
-                conversation_id=st.session_state.conversation_id
+                conversation_id=st.session_state.conversation_id,
+                use_graph_rag=st.session_state.get("use_graph_rag", False),
             )
 
         st.session_state.chat_history.append({

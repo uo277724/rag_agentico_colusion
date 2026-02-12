@@ -11,3 +11,4 @@ pdfminer
 pdfminer.six
 scikit-learn
 textstat
+networkx

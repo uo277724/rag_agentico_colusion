@@ -226,7 +226,7 @@ class ScreeningPlannerAgent:
     # --------------------------------------------------
     # Run
     # --------------------------------------------------
-    def run(self, query: str, conversation_id: str) -> Dict[str, Any]:
+    def run(self, query: str, conversation_id: str, use_graph_rag: bool = False) -> Dict[str, Any]:
         print("\n[PLANNER] ======================")
 
         memory = self.memory_store.get_state(conversation_id)
@@ -299,8 +299,10 @@ class ScreeningPlannerAgent:
         # STEP 2: DOCUMENTAL RAG
         # ----------------------------------------------
         if intent == "rag":
+            tool_name = "graph_rag_query" if use_graph_rag else "rag_query"
+
             rag = self.tool_manager.execute(
-                "rag_query",
+                tool_name,
                 {"query": effective_query}
             )
 
